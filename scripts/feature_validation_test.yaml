@@ -1,0 +1,79 @@
+name: feature_validation_test
+description: "新功能验证测试脚本 - 测试步骤跳转、复杂条件、动态坐标"
+version: "1.0"
+
+variables:
+  test_mode: "validation"
+  retry_count: 0
+  max_retries: 2
+  score_threshold: 75
+  current_score: 85
+
+steps:
+  - name: test_start
+    type: screenshot
+    description: "测试开始 - 获取初始状态"
+    timeout: 10
+    output_vars:
+      test_start_time: "timestamp"
+    on_success: "test_basic_condition"
+
+  - name: test_basic_condition
+    type: wait
+    timeout: 1
+    description: "测试基础条件判断"
+    condition: "test_mode == 'validation'"
+    on_success: "test_numeric_comparison"
+    on_failure: "test_failed"
+
+  - name: test_numeric_comparison
+    type: wait
+    timeout: 1
+    description: "测试数值比较"
+    condition: "current_score >= 75"
+    on_success: "test_complex_and_condition"
+    on_failure: "test_failed"
+
+  - name: test_complex_and_condition
+    type: wait
+    timeout: 1
+    description: "测试复杂AND条件"
+    condition: "retry_count < 2 AND current_score > 80"
+    on_success: "test_or_condition"
+    on_failure: "test_failed"
+
+  - name: test_or_condition
+    type: wait
+    timeout: 1
+    description: "测试OR条件"
+    condition: "retry_count > 5 OR current_score >= 85"
+    on_success: "test_step_jump"
+    on_failure: "test_failed"
+
+  - name: test_step_jump
+    type: wait
+    timeout: 1
+    description: "测试步骤跳转到specific_step"
+    on_success: "specific_step"
+
+  - name: skipped_step
+    type: wait
+    timeout: 1
+    description: "这个步骤应该被跳过"
+    on_success: "test_failed"
+
+  - name: specific_step
+    type: wait
+    timeout: 1
+    description: "成功跳转到的特定步骤"
+    on_success: "test_successful"
+
+  - name: test_successful
+    type: screenshot
+    description: "所有测试通过！"
+    timeout: 10
+
+  - name: test_failed
+    type: screenshot
+    description: "测试失败"
+    timeout: 10

@@ -2,10 +2,12 @@ package engine
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,15 +25,41 @@ type ScriptEngine struct {
 	executions    map[string]*models.ExecutionContext
 	mu            sync.RWMutex
 	responseChans map[string]chan models.Response
+
+	// 新增：文本查找缓存
+	textCache    map[string][]models.TextPosition
+	cacheMu      sync.RWMutex
+	cacheTimeout time.Duration
+
+	// 新增：持久化存储
+	persistencePath string
 }
 
 // NewScriptEngine 创建新的脚本引擎
 func NewScriptEngine(mqttClient *mqtt.Client) *ScriptEngine {
-	return &ScriptEngine{
-		mqttClient:    mqttClient,
-		executions:    make(map[string]*models.ExecutionContext),
-		responseChans: make(map[string]chan models.Response),
+	persistencePath := "./data/executions"
+
+	// 确保持久化目录存在
+	if err := os.MkdirAll(persistencePath, 0755); err != nil {
+		log.Printf("Warning: Failed to create persistence directory: %v", err)
 	}
+
+	engine := &ScriptEngine{
+		mqttClient:      mqttClient,
+		executions:      make(map[string]*models.ExecutionContext),
+		responseChans:   make(map[string]chan models.Response),
+		textCache:       make(map[string][]models.TextPosition),
+		cacheTimeout:    10 * time.Second, // 默认缓存时间
+		persistencePath: persistencePath,
+	}
+
+	// 加载历史执行记录
+	engine.loadExecutionHistory()
+
+	// 启动定期清理任务
+	engine.startPeriodicCleanup()
+
+	return engine
 }
 
 // LoadScript 从YAML文件加载脚本
@@ -123,7 +151,12 @@ func (se *ScriptEngine) ExecuteScript(request *models.ScriptRequest) (*models.Sc
 		Results:     make([]models.Response, 0),
 	}
 
-	// 将运行时变量复制到RuntimeVars中
+	// 将脚本全局变量复制到RuntimeVars中
+	for k, v := range script.Variables {
+		context.RuntimeVars[k] = v
+	}
+
+	// 将请求变量复制到RuntimeVars中（覆盖同名的脚本变量）
 	for k, v := range request.Variables {
 		context.RuntimeVars[k] = v
 	}
@@ -152,14 +185,23 @@ func (se *ScriptEngine) executeSteps(executionID string, script *models.Script, 
 		se.mu.Unlock()
 	}()
 
+	// 创建步骤名称到索引的映射，用于步骤跳转
+	stepMap := make(map[string]int)
 	for i, step := range script.Steps {
+		stepMap[step.Name] = i
+	}
+
+	i := 0
+	for i < len(script.Steps) {
+		step := script.Steps[i]
 		context.CurrentStep = i
 
 		log.Printf("Executing step %d: %s", i, step.Name)
 
-		// 检查条件执行
-		if step.Condition != "" && !se.evaluateCondition(step.Condition, context) {
+		// 检查条件执行（使用增强的条件评估）
+		if step.Condition != "" && !se.evaluateConditionExpression(step.Condition, context) {
 			log.Printf("Step %d skipped due to condition: %s", i, step.Condition)
+			i++ // 条件不满足时，直接跳过当前步骤
 			continue
 		}
 
@@ -254,18 +296,40 @@ func (se *ScriptEngine) executeSteps(executionID string, script *models.Script, 
 			}
 		}
 
-		// 检查步骤结果
+		// 检查步骤结果和处理跳转
 		if response.Status == "error" {
 			if step.OnFailure != "" {
 				// 跳转到指定步骤
-				if step.OnFailure == "end" {
+				targetStep := step.OnFailure
+				log.Printf("Step %d failed, jumping to onFailure step: %s", i, targetStep)
+
+				// 处理步骤跳转
+				jumpIndex := se.handleStepJump(targetStep, stepMap, context)
+				if jumpIndex >= 0 {
+					i = jumpIndex // 跳转到指定步骤
+					continue
+				} else if jumpIndex == -2 {
 					context.Status = "failed"
 					break
 				}
-				// 这里可以实现步骤跳转逻辑
 			} else {
 				context.Status = "failed"
 				break
+			}
+		} else if response.Status == "success" || response.Status == "ok" {
+			if step.OnSuccess != "" {
+				// 处理成功跳转
+				targetStep := step.OnSuccess
+				log.Printf("Step %d succeeded, jumping to onSuccess step: %s", i, targetStep)
+
+				jumpIndex := se.handleStepJump(targetStep, stepMap, context)
+				if jumpIndex >= 0 {
+					i = jumpIndex // 跳转到指定步骤
+					continue
+				} else if jumpIndex == -2 {
+					break // 正常结束
+				}
+				// 如果跳转失败（jumpIndex == -1），继续正常执行
 			}
 		}
 
@@ -273,6 +337,8 @@ func (se *ScriptEngine) executeSteps(executionID string, script *models.Script, 
 		if step.Wait > 0 {
 			time.Sleep(time.Duration(step.Wait) * time.Second)
 		}
+
+		i++ // 正常继续下一步
 	}
 
 	if context.Status == "running" {
@@ -280,6 +346,9 @@ func (se *ScriptEngine) executeSteps(executionID string, script *models.Script, 
 	}
 
 	log.Printf("Script execution %s completed with status: %s", executionID, context.Status)
+
+	// 保存执行记录到文件
+	se.saveExecution(context)
 }
 
 // executeCommand 执行单个命令
@@ -350,7 +419,16 @@ func (se *ScriptEngine) substituteVariables(text string, variables map[string]in
 	result := text
 	for key, value := range variables {
 		placeholder := fmt.Sprintf("{{%s}}", key)
-		result = strings.ReplaceAll(result, placeholder, fmt.Sprintf("%v", value))
+		var valueStr string
+
+		// 处理nil值，避免生成"<nil>"字符串
+		if value == nil {
+			valueStr = ""
+		} else {
+			valueStr = fmt.Sprintf("%v", value)
+		}
+
+		result = strings.ReplaceAll(result, placeholder, valueStr)
 	}
 	return result
 }
@@ -430,9 +508,14 @@ func (se *ScriptEngine) processStepOutput(step models.ScriptStep, response *mode
 		case "screenshot":
 			value = response.Screenshot
 		default:
-			// 处理复杂的输出路径，如 "text_info[0].x"
+			// 处理复杂的输出路径，如 "text_info[0].x" 或 "text_info[text='设置'].x"
 			log.Printf("Extracting value for path: %s", outputPath)
-			value = se.extractValue(response, outputPath)
+
+			// 先进行变量替换
+			expandedPath := se.substituteVariables(outputPath, context.RuntimeVars)
+			log.Printf("Expanded path: %s", expandedPath)
+
+			value = se.extractValue(response, expandedPath)
 			log.Printf("Extracted value: %v", value)
 		}
 
@@ -449,7 +532,7 @@ func (se *ScriptEngine) processStepOutput(step models.ScriptStep, response *mode
 
 // extractValue 从响应中提取指定路径的值
 func (se *ScriptEngine) extractValue(response *models.Response, path string) interface{} {
-	// 简化版本的路径提取，支持基本的路径如 "text_info[0].x"
+	// 支持路径格式如 "text_info[0].x", "text_info[text='设置'].x"
 	parts := strings.Split(path, ".")
 
 	if len(parts) == 0 {
@@ -459,7 +542,7 @@ func (se *ScriptEngine) extractValue(response *models.Response, path string) int
 	var current interface{} = response
 
 	for _, part := range parts {
-		// 处理数组索引，如 "text_info[0]"
+		// 处理数组索引，如 "text_info[0]" 或 "text_info[text='设置']"
 		if strings.Contains(part, "[") && strings.Contains(part, "]") {
 			// 提取字段名和索引
 			fieldEnd := strings.Index(part, "[")
@@ -474,9 +557,87 @@ func (se *ScriptEngine) extractValue(response *models.Response, path string) int
 
 			// 处理数组索引
 			if slice, ok := current.([]models.TextPosition); ok {
-				if idx := se.parseIndex(indexPart); idx >= 0 && idx < len(slice) {
-					current = slice[idx]
+				var found bool = false
+
+				// 支持多种查找语法
+				if strings.HasPrefix(indexPart, "text='") && strings.HasSuffix(indexPart, "'") {
+					// 精确文本匹配: text='设置'
+					targetText := indexPart[6 : len(indexPart)-1]
+					for i, textPos := range slice {
+						if textPos.Text == targetText {
+							current = slice[i]
+							found = true
+							centerX := textPos.X + textPos.Width/2
+							centerY := textPos.Y + textPos.Height/2
+							log.Printf("Found exact text '%s': original=(%d,%d), size=(%dx%d), center=(%d,%d)",
+								targetText, textPos.X, textPos.Y, textPos.Width, textPos.Height, centerX, centerY)
+							break
+						}
+					}
+					if !found {
+						log.Printf("Warning: Text '%s' not found in text_info array", targetText)
+						return nil
+					}
+				} else if strings.HasPrefix(indexPart, "contains='") && strings.HasSuffix(indexPart, "'") {
+					// 包含文本匹配: contains='设'
+					targetText := indexPart[10 : len(indexPart)-1]
+					for i, textPos := range slice {
+						if strings.Contains(textPos.Text, targetText) {
+							current = slice[i]
+							found = true
+							centerX := textPos.X + textPos.Width/2
+							centerY := textPos.Y + textPos.Height/2
+							log.Printf("Found text containing '%s': text='%s', original=(%d,%d), size=(%dx%d), center=(%d,%d)",
+								targetText, textPos.Text, textPos.X, textPos.Y, textPos.Width, textPos.Height, centerX, centerY)
+							break
+						}
+					}
+					if !found {
+						log.Printf("Warning: No text containing '%s' found in text_info array", targetText)
+						return nil
+					}
+				} else if strings.HasPrefix(indexPart, "x>") {
+					// X坐标条件查找: x>500
+					threshold, err := strconv.Atoi(indexPart[2:])
+					if err == nil {
+						for i, textPos := range slice {
+							if textPos.X > threshold {
+								current = slice[i]
+								found = true
+								log.Printf("Found text with x>%d: '%s' at (%d, %d)", threshold, textPos.Text, textPos.X, textPos.Y)
+								break
+							}
+						}
+					}
+					if !found {
+						log.Printf("Warning: No text with x>%s found in text_info array", indexPart[2:])
+						return nil
+					}
+				} else if strings.HasPrefix(indexPart, "y>") {
+					// Y坐标条件查找: y>800
+					threshold, err := strconv.Atoi(indexPart[2:])
+					if err == nil {
+						for i, textPos := range slice {
+							if textPos.Y > threshold {
+								current = slice[i]
+								found = true
+								log.Printf("Found text with y>%d: '%s' at (%d, %d)", threshold, textPos.Text, textPos.X, textPos.Y)
+								break
+							}
+						}
+					}
+					if !found {
+						log.Printf("Warning: No text with y>%s found in text_info array", indexPart[2:])
+						return nil
+					}
 				} else {
+					// 数字索引
+					if idx := se.parseIndex(indexPart); idx >= 0 && idx < len(slice) {
+						current = slice[idx]
+						found = true
+					}
+				}
+				if !found {
 					return nil
 				}
 			} else {
@@ -517,8 +678,22 @@ func (se *ScriptEngine) getFieldValue(obj interface{}, field string) interface{}
 		case "text":
 			return v.Text
 		case "x":
-			return v.X
+			// 返回文本区域的中心X坐标
+			return v.X + v.Width/2
 		case "y":
+			// 返回文本区域的中心Y坐标
+			return v.Y + v.Height/2
+		case "center_x":
+			// 显式获取中心X坐标的别名
+			return v.X + v.Width/2
+		case "center_y":
+			// 显式获取中心Y坐标的别名
+			return v.Y + v.Height/2
+		case "left_x":
+			// 获取左上角X坐标
+			return v.X
+		case "top_y":
+			// 获取左上角Y坐标
 			return v.Y
 		case "width":
 			return v.Width
@@ -535,21 +710,11 @@ func (se *ScriptEngine) parseIndex(indexStr string) int {
 		return -1
 	}
 
-	// 简单的数字解析
-	if indexStr == "0" {
-		return 0
-	} else if indexStr == "1" {
-		return 1
-	} else if indexStr == "2" {
-		return 2
-	} else if indexStr == "3" {
-		return 3
-	} else if indexStr == "4" {
-		return 4
-	} else if indexStr == "5" {
-		return 5
+	// 使用 strconv.Atoi 解析任意数字索引
+	if idx, err := strconv.Atoi(indexStr); err == nil {
+		return idx
 	}
-	// 可以扩展支持更多索引或使用 strconv.Atoi
+
 	return -1
 }
 
@@ -592,6 +757,160 @@ func (se *ScriptEngine) evaluateCondition(condition string, context *models.Exec
 	}
 
 	return false
+}
+
+// handleStepJump 处理步骤跳转逻辑
+func (se *ScriptEngine) handleStepJump(target string, stepMap map[string]int, context *models.ExecutionContext) int {
+	switch target {
+	case "end":
+		log.Printf("Ending script execution due to step jump")
+		return -2 // 特殊值表示结束执行
+	case "next":
+		return -1 // 继续下一步
+	case "skip":
+		return -1 // 跳过当前步骤，继续下一步
+	default:
+		// 尝试跳转到指定的步骤名称
+		if stepIndex, exists := stepMap[target]; exists {
+			log.Printf("Jumping to step '%s' at index %d", target, stepIndex)
+			return stepIndex
+		} else {
+			log.Printf("Warning: Step '%s' not found for jump, continuing normally", target)
+			return -1
+		}
+	}
+}
+
+// evaluateConditionExpression 评估复杂条件表达式
+func (se *ScriptEngine) evaluateConditionExpression(condition string, context *models.ExecutionContext) bool {
+	// 支持更复杂的条件表达式
+	condition = strings.TrimSpace(condition)
+
+	// 支持逻辑运算符 AND, OR
+	if strings.Contains(condition, " AND ") {
+		parts := strings.Split(condition, " AND ")
+		for _, part := range parts {
+			if !se.evaluateCondition(strings.TrimSpace(part), context) {
+				return false
+			}
+		}
+		return true
+	}
+
+	if strings.Contains(condition, " OR ") {
+		parts := strings.Split(condition, " OR ")
+		for _, part := range parts {
+			if se.evaluateCondition(strings.TrimSpace(part), context) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// 支持数值比较
+	if strings.Contains(condition, ">=") {
+		parts := strings.Split(condition, ">=")
+		if len(parts) == 2 {
+			left := se.getVariableValue(strings.TrimSpace(parts[0]), context)
+			right := se.getVariableValue(strings.TrimSpace(parts[1]), context)
+			return se.compareNumbers(left, right, ">=")
+		}
+	}
+
+	if strings.Contains(condition, "<=") {
+		parts := strings.Split(condition, "<=")
+		if len(parts) == 2 {
+			left := se.getVariableValue(strings.TrimSpace(parts[0]), context)
+			right := se.getVariableValue(strings.TrimSpace(parts[1]), context)
+			return se.compareNumbers(left, right, "<=")
+		}
+	}
+
+	if strings.Contains(condition, ">") {
+		parts := strings.Split(condition, ">")
+		if len(parts) == 2 {
+			left := se.getVariableValue(strings.TrimSpace(parts[0]), context)
+			right := se.getVariableValue(strings.TrimSpace(parts[1]), context)
+			return se.compareNumbers(left, right, ">")
+		}
+	}
+
+	if strings.Contains(condition, "<") {
+		parts := strings.Split(condition, "<")
+		if len(parts) == 2 {
+			left := se.getVariableValue(strings.TrimSpace(parts[0]), context)
+			right := se.getVariableValue(strings.TrimSpace(parts[1]), context)
+			return se.compareNumbers(left, right, "<")
+		}
+	}
+
+	// 回退到原始条件评估
+	return se.evaluateCondition(condition, context)
+}
+
+// getVariableValue 获取变量值或解析字面值
+func (se *ScriptEngine) getVariableValue(expr string, context *models.ExecutionContext) interface{} {
+	expr = strings.TrimSpace(expr)
+
+	// 移除引号
+	if (strings.HasPrefix(expr, "'") && strings.HasSuffix(expr, "'")) ||
+		(strings.HasPrefix(expr, "\"") && strings.HasSuffix(expr, "\"")) {
+		return expr[1 : len(expr)-1]
+	}
+
+	// 尝试解析为数字
+	if num, err := strconv.ParseFloat(expr, 64); err == nil {
+		return num
+	}
+
+	// 尝试从变量中获取
+	if value, exists := context.RuntimeVars[expr]; exists {
+		return value
+	}
+
+	// 如果是字符串字面值
+	return expr
+}
+
+// compareNumbers 比较两个值（数字比较）
+func (se *ScriptEngine) compareNumbers(left, right interface{}, operator string) bool {
+	leftNum, leftOk := se.toNumber(left)
+	rightNum, rightOk := se.toNumber(right)
+
+	if !leftOk || !rightOk {
+		log.Printf("Warning: Cannot compare non-numeric values: %v %s %v", left, operator, right)
+		return false
+	}
+
+	switch operator {
+	case ">":
+		return leftNum > rightNum
+	case "<":
+		return leftNum < rightNum
+	case ">=":
+		return leftNum >= rightNum
+	case "<=":
+		return leftNum <= rightNum
+	default:
+		return false
+	}
+}
+
+// toNumber 将接口值转换为数字
+func (se *ScriptEngine) toNumber(value interface{}) (float64, bool) {
+	switch v := value.(type) {
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case float64:
+		return v, true
+	case string:
+		if num, err := strconv.ParseFloat(v, 64); err == nil {
+			return num, true
+		}
+	}
+	return 0, false
 }
 
 // convertToInt 将interface{}转换为int
@@ -637,14 +956,27 @@ func (se *ScriptEngine) convertCoordinateToInt(value interface{}, variables map[
 	case float64:
 		return int(v)
 	case string:
-		// 如果是空字符串，返回0
-		if v == "" {
+		// 如果是空字符串或"<nil>"，返回0
+		if v == "" || v == "<nil>" {
 			return 0
 		}
 
 		// 如果是变量模板，先替换变量
 		if strings.Contains(v, "{{") && strings.Contains(v, "}}") {
 			substituted := se.substituteVariables(v, variables)
+
+			// 防止无限递归：如果替换后的值和原值相同，直接返回0
+			if substituted == v {
+				log.Printf("Warning: Variable substitution resulted in unchanged value '%s', returning 0", v)
+				return 0
+			}
+
+			// 防止<nil>递归：如果替换后是<nil>，直接返回0
+			if substituted == "<nil>" {
+				log.Printf("Warning: Variable substitution resulted in <nil>, returning 0")
+				return 0
+			}
+
 			// 递归调用处理替换后的值
 			return se.convertCoordinateToInt(substituted, variables)
 		}
@@ -660,4 +992,123 @@ func (se *ScriptEngine) convertCoordinateToInt(value interface{}, variables map[
 		log.Printf("Warning: Cannot convert coordinate type %T to int", value)
 		return 0
 	}
+}
+
+// =============================================================================
+// 持久化存储相关方法
+// =============================================================================
+
+// loadExecutionHistory 加载历史执行记录
+func (se *ScriptEngine) loadExecutionHistory() {
+	log.Printf("Loading execution history from: %s", se.persistencePath)
+
+	files, err := os.ReadDir(se.persistencePath)
+	if err != nil {
+		log.Printf("Warning: Failed to read execution history directory: %v", err)
+		return
+	}
+
+	loadedCount := 0
+	for _, file := range files {
+		if !strings.HasSuffix(file.Name(), ".json") {
+			continue
+		}
+
+		filePath := filepath.Join(se.persistencePath, file.Name())
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			log.Printf("Warning: Failed to read execution file %s: %v", filePath, err)
+			continue
+		}
+
+		var context models.ExecutionContext
+		if err := json.Unmarshal(data, &context); err != nil {
+			log.Printf("Warning: Failed to unmarshal execution file %s: %v", filePath, err)
+			continue
+		}
+
+		// 将执行记录加载到内存中
+		se.executions[context.ExecutionID] = &context
+		loadedCount++
+	}
+
+	log.Printf("Loaded %d execution records from history", loadedCount)
+}
+
+// saveExecution 保存单个执行记录到文件
+func (se *ScriptEngine) saveExecution(context *models.ExecutionContext) {
+	if se.persistencePath == "" {
+		return
+	}
+
+	fileName := fmt.Sprintf("%s.json", context.ExecutionID)
+	filePath := filepath.Join(se.persistencePath, fileName)
+
+	data, err := json.MarshalIndent(context, "", "  ")
+	if err != nil {
+		log.Printf("Warning: Failed to marshal execution context: %v", err)
+		return
+	}
+
+	if err := os.WriteFile(filePath, data, 0644); err != nil {
+		log.Printf("Warning: Failed to save execution to file %s: %v", filePath, err)
+	} else {
+		log.Printf("Execution %s saved to %s", context.ExecutionID, filePath)
+	}
+}
+
+// cleanupOldExecutions 清理过期的执行记录（保留最近30天的记录）
+func (se *ScriptEngine) cleanupOldExecutions() {
+	cutoffTime := time.Now().AddDate(0, 0, -30) // 30天前
+
+	files, err := os.ReadDir(se.persistencePath)
+	if err != nil {
+		log.Printf("Warning: Failed to read execution directory for cleanup: %v", err)
+		return
+	}
+
+	cleanedCount := 0
+	for _, file := range files {
+		if !strings.HasSuffix(file.Name(), ".json") {
+			continue
+		}
+
+		filePath := filepath.Join(se.persistencePath, file.Name())
+		info, err := file.Info()
+		if err != nil {
+			continue
+		}
+
+		// 如果文件修改时间早于截止时间，删除文件
+		if info.ModTime().Before(cutoffTime) {
+			if err := os.Remove(filePath); err != nil {
+				log.Printf("Warning: Failed to remove old execution file %s: %v", filePath, err)
+			} else {
+				cleanedCount++
+				log.Printf("Removed old execution file: %s", filePath)
+
+				// 同时从内存中移除
+				executionID := strings.TrimSuffix(file.Name(), ".json")
+				se.mu.Lock()
+				delete(se.executions, executionID)
+				se.mu.Unlock()
+			}
+		}
+	}
+
+	if cleanedCount > 0 {
+		log.Printf("Cleaned up %d old execution records", cleanedCount)
+	}
+}
+
+// startPeriodicCleanup 启动定期清理任务
+func (se *ScriptEngine) startPeriodicCleanup() {
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour) // 每天清理一次
+		defer ticker.Stop()
+
+		for range ticker.C {
+			se.cleanupOldExecutions()
+		}
+	}()
 }

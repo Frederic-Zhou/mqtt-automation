@@ -18,8 +18,8 @@ steps:
     timeout: 10
     output_vars:
       found_status: "result"
-      text_x: "text_info[0].x"
-      text_y: "text_info[0].y"
+      text_x: "text_info[text='{{target_text}}'].x"
+      text_y: "text_info[text='{{target_text}}'].y"
 
   - name: click_found_text
     type: tap

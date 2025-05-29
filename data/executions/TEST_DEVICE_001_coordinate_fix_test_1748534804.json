@@ -1,0 +1,141 @@
+{
+  "execution_id": "TEST_DEVICE_001_coordinate_fix_test_1748534804",
+  "script_name": "coordinate_fix_test",
+  "device_id": "TEST_DEVICE_001",
+  "variables": {
+    "target_text": "设置"
+  },
+  "current_step": 10,
+  "start_time": "2025-05-30T00:06:44.071518+08:00",
+  "status": "completed",
+  "results": [
+    {
+      "id": "TEST_DEVICE_001_coordinate_fix_test_1748534804_1748534804071927000",
+      "execution_id": "TEST_DEVICE_001_coordinate_fix_test_1748534804",
+      "command": "",
+      "status": "timeout",
+      "error": "command execution timeout",
+      "duration": 0,
+      "timestamp": 1748534814
+    },
+    {
+      "id": "TEST_DEVICE_001_coordinate_fix_test_1748534804_1748534814079225000",
+      "execution_id": "TEST_DEVICE_001_coordinate_fix_test_1748534804",
+      "command": "",
+      "status": "timeout",
+      "error": "command execution timeout",
+      "duration": 0,
+      "timestamp": 1748534824
+    },
+    {
+      "id": "TEST_DEVICE_001_coordinate_fix_test_1748534804_1748534824086837000",
+      "execution_id": "TEST_DEVICE_001_coordinate_fix_test_1748534804",
+      "command": "",
+      "status": "timeout",
+      "error": "command execution timeout",
+      "duration": 0,
+      "timestamp": 1748534829
+    },
+    {
+      "id": "TEST_DEVICE_001_coordinate_fix_test_1748534804_1748534829089229000",
+      "execution_id": "TEST_DEVICE_001_coordinate_fix_test_1748534804",
+      "command": "",
+      "status": "timeout",
+      "error": "command execution timeout",
+      "duration": 0,
+      "timestamp": 1748534839
+    },
+    {
+      "id": "TEST_DEVICE_001_coordinate_fix_test_1748534804_1748534839092579000",
+      "execution_id": "TEST_DEVICE_001_coordinate_fix_test_1748534804",
+      "command": "",
+      "status": "timeout",
+      "error": "command execution timeout",
+      "duration": 0,
+      "timestamp": 1748534844
+    },
+    {
+      "id": "TEST_DEVICE_001_coordinate_fix_test_1748534804_1748534844096382000",
+      "execution_id": "TEST_DEVICE_001_coordinate_fix_test_1748534804",
+      "command": "",
+      "status": "timeout",
+      "error": "command execution timeout",
+      "duration": 0,
+      "timestamp": 1748534854
+    },
+    {
+      "id": "TEST_DEVICE_001_coordinate_fix_test_1748534804_1748534854100964000",
+      "execution_id": "TEST_DEVICE_001_coordinate_fix_test_1748534804",
+      "command": "",
+      "status": "timeout",
+      "error": "command execution timeout",
+      "duration": 0,
+      "timestamp": 1748534864
+    },
+    {
+      "id": "TEST_DEVICE_001_coordinate_fix_test_1748534804_1748534864103510000",
+      "execution_id": "TEST_DEVICE_001_coordinate_fix_test_1748534804",
+      "command": "",
+      "status": "timeout",
+      "error": "command execution timeout",
+      "duration": 0,
+      "timestamp": 1748534874
+    },
+    {
+      "id": "TEST_DEVICE_001_coordinate_fix_test_1748534804_1748534874105224000",
+      "execution_id": "TEST_DEVICE_001_coordinate_fix_test_1748534804",
+      "command": "",
+      "status": "timeout",
+      "error": "command execution timeout",
+      "duration": 0,
+      "timestamp": 1748534876
+    }
+  ],
+  "runtime_vars": {
+    "backup_text": "浏览器",
+    "center_x": null,
+    "center_y": null,
+    "click_threshold": 50,
+    "error_type": null,
+    "final_time": null,
+    "initial_time": null,
+    "raw_x": null,
+    "raw_y": null,
+    "search_result": "",
+    "target_text": "设置",
+    "test_status": null,
+    "text_count": null,
+    "text_height": null,
+    "text_width": null
+  },
+  "step_outputs": {
+    "click_failed": {
+      "error_type": null
+    },
+    "coordinate_validation_failed": {
+      "error_type": null
+    },
+    "find_target_text": {
+      "center_x": null,
+      "center_y": null,
+      "raw_x": null,
+      "raw_y": null,
+      "search_result": "",
+      "text_count": null,
+      "text_height": null,
+      "text_width": null
+    },
+    "initial_screenshot": {
+      "initial_time": null
+    },
+    "no_text_found": {
+      "error_type": null
+    },
+    "test_completed": {
+      "test_status": null
+    },
+    "verify_click_success": {
+      "final_time": null
+    }
+  }
+}

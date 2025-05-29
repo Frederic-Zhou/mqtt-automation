@@ -1,0 +1,68 @@
+name: smart_text_finding
+description: "智能文本查找测试 - 展示各种查找语法"
+version: "1.0"
+
+variables:
+  search_keyword: "设"
+
+steps:
+  - name: screenshot_before_search
+    type: screenshot
+    description: "搜索前截图"
+    timeout: 10
+
+  - name: find_exact_text
+    type: check_text
+    text: "设置"
+    description: "精确文本查找测试"
+    timeout: 10
+    output_vars:
+      exact_found: "result"
+      exact_x: "text_info[text='设置'].x"
+      exact_y: "text_info[text='设置'].y"
+      exact_text: "text_info[text='设置'].text"
+
+  - name: find_containing_text
+    type: check_text
+    text: "设置"
+    description: "包含文本查找测试"
+    timeout: 10
+    output_vars:
+      contains_found: "result"
+      contains_x: "text_info[contains='{{search_keyword}}'].x"
+      contains_y: "text_info[contains='{{search_keyword}}'].y"
+      contains_text: "text_info[contains='{{search_keyword}}'].text"
+
+  - name: find_right_side_text
+    type: check_text
+    text: "设置"
+    description: "右侧文本查找测试"
+    timeout: 10
+    output_vars:
+      right_found: "result"
+      right_x: "text_info[x>400].x"
+      right_y: "text_info[x>400].y"
+      right_text: "text_info[x>400].text"
+
+  - name: find_bottom_text
+    type: check_text
+    text: "设置"
+    description: "底部文本查找测试"
+    timeout: 10
+    output_vars:
+      bottom_found: "result"
+      bottom_x: "text_info[y>800].x"
+      bottom_y: "text_info[y>800].y"
+      bottom_text: "text_info[y>800].text"
+
+  - name: click_smart_target
+    type: tap
+    x: "{{contains_x}}"
+    y: "{{contains_y}}"
+    description: "点击智能查找到的目标"
+    timeout: 5
+
+  - name: final_screenshot
+    type: screenshot
+    description: "点击后截图"
+    timeout: 10

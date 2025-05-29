@@ -1,0 +1,124 @@
+{
+  "execution_id": "TEST_DEVICE_002_comprehensive_test_fixed_1748534836",
+  "script_name": "comprehensive_test_fixed",
+  "device_id": "TEST_DEVICE_002",
+  "variables": {
+    "target_app": "测试应用",
+    "test_mode": "validation",
+    "timeout_seconds": "5"
+  },
+  "current_step": 13,
+  "start_time": "2025-05-30T00:07:16.789692+08:00",
+  "status": "completed",
+  "results": [
+    {
+      "id": "TEST_DEVICE_002_comprehensive_test_fixed_1748534836_1748534836789738000",
+      "execution_id": "TEST_DEVICE_002_comprehensive_test_fixed_1748534836",
+      "command": "",
+      "status": "timeout",
+      "error": "command execution timeout",
+      "duration": 0,
+      "timestamp": 1748534846
+    },
+    {
+      "id": "TEST_DEVICE_002_comprehensive_test_fixed_1748534836_1748534846791580000",
+      "execution_id": "TEST_DEVICE_002_comprehensive_test_fixed_1748534836",
+      "command": "",
+      "status": "timeout",
+      "error": "command execution timeout",
+      "duration": 0,
+      "timestamp": 1748534856
+    },
+    {
+      "id": "TEST_DEVICE_002_comprehensive_test_fixed_1748534836_1748534856793618000",
+      "execution_id": "TEST_DEVICE_002_comprehensive_test_fixed_1748534836",
+      "command": "",
+      "status": "timeout",
+      "error": "command execution timeout",
+      "duration": 0,
+      "timestamp": 1748534857
+    },
+    {
+      "id": "TEST_DEVICE_002_comprehensive_test_fixed_1748534836_1748534857794217000",
+      "execution_id": "TEST_DEVICE_002_comprehensive_test_fixed_1748534836",
+      "command": "",
+      "status": "timeout",
+      "error": "command execution timeout",
+      "duration": 0,
+      "timestamp": 1748534867
+    },
+    {
+      "id": "TEST_DEVICE_002_comprehensive_test_fixed_1748534836_1748534867796985000",
+      "execution_id": "TEST_DEVICE_002_comprehensive_test_fixed_1748534836",
+      "command": "",
+      "status": "timeout",
+      "error": "command execution timeout",
+      "duration": 0,
+      "timestamp": 1748534877
+    },
+    {
+      "id": "TEST_DEVICE_002_comprehensive_test_fixed_1748534836_1748534877800931000",
+      "execution_id": "TEST_DEVICE_002_comprehensive_test_fixed_1748534836",
+      "command": "",
+      "status": "timeout",
+      "error": "command execution timeout",
+      "duration": 0,
+      "timestamp": 1748534887
+    },
+    {
+      "id": "TEST_DEVICE_002_comprehensive_test_fixed_1748534836_1748534887803501000",
+      "execution_id": "TEST_DEVICE_002_comprehensive_test_fixed_1748534836",
+      "command": "",
+      "status": "timeout",
+      "error": "command execution timeout",
+      "duration": 0,
+      "timestamp": 1748534897
+    }
+  ],
+  "runtime_vars": {
+    "completion_rate": null,
+    "current_test": null,
+    "failure_step": null,
+    "final_status": null,
+    "phase1_start_time": null,
+    "phase2_start_time": null,
+    "should_not_execute": null,
+    "substitution_result": "",
+    "success_count": null,
+    "target_app": "测试应用",
+    "test_mode": "validation",
+    "test_phase": null,
+    "timeout_seconds": "5",
+    "total_tests": 8
+  },
+  "step_outputs": {
+    "phase1_start": {
+      "phase1_start_time": null,
+      "test_phase": null
+    },
+    "phase2_start": {
+      "phase2_start_time": null,
+      "test_phase": null
+    },
+    "test6_skipped": {
+      "should_not_execute": null
+    },
+    "test8_variable_substitution": {
+      "current_test": null,
+      "substitution_result": "",
+      "success_count": null
+    },
+    "test_failed": {
+      "failure_step": null,
+      "final_status": null
+    },
+    "test_partial_success": {
+      "completion_rate": null,
+      "final_status": null
+    },
+    "test_success": {
+      "completion_rate": null,
+      "final_status": null
+    }
+  }
+}

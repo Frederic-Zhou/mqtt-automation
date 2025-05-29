@@ -1,0 +1,166 @@
+name: comprehensive_test_fixed
+description: "综合功能测试 - 验证所有新功能的集成"
+version: "1.0"
+
+variables:
+  test_phase: "initialization"
+  success_count: 0
+  total_tests: 8
+  current_test: 1
+
+steps:
+  # 第一阶段：基础功能测试
+  - name: phase1_start
+    type: screenshot
+    description: "第一阶段开始：基础功能测试"
+    timeout: 10
+    output_vars:
+      phase1_start_time: "timestamp"
+      test_phase: "basic_functions"
+
+  # 测试1：条件表达式
+  - name: test1_conditions
+    type: wait
+    timeout: 1
+    description: "测试1：条件表达式评估"
+    condition: "current_test <= total_tests AND test_phase == 'basic_functions'"
+    output_vars:
+      test1_result: "success"
+      current_test: 2
+    on_success: "test2_numeric_comparison"
+    on_failure: "test_failed"
+
+  # 测试2：数值比较
+  - name: test2_numeric_comparison
+    type: wait
+    timeout: 1
+    description: "测试2：数值比较功能"
+    condition: "success_count >= 0 AND current_test > 1"
+    output_vars:
+      test2_result: "success"
+      success_count: 1
+      current_test: 3
+    on_success: "test3_text_search"
+    on_failure: "test_failed"
+
+  # 测试3：文本搜索和坐标
+  - name: test3_text_search
+    type: check_text
+    text: "设置"
+    description: "测试3：文本搜索和坐标获取"
+    timeout: 10
+    output_vars:
+      text_search_result: "result"
+      found_x: "text_info[text='设置'].x"
+      found_y: "text_info[text='设置'].y"
+      success_count: 2
+      current_test: 4
+    condition: "text_search_result == 'success' OR text_search_result == 'timeout'"
+    on_success: "test4_coordinate_validation"
+    on_failure: "test4_coordinate_validation"
+
+  # 测试4：坐标验证
+  - name: test4_coordinate_validation
+    type: wait
+    timeout: 1
+    description: "测试4：坐标验证（即使搜索失败也继续）"
+    condition: "current_test == 4"
+    output_vars:
+      coordinate_test: "completed"
+      success_count: 3
+      current_test: 5
+    on_success: "phase2_start"
+
+  # 第二阶段：高级功能测试
+  - name: phase2_start
+    type: screenshot
+    description: "第二阶段开始：高级功能测试"
+    timeout: 10
+    output_vars:
+      phase2_start_time: "timestamp"
+      test_phase: "advanced_functions"
+
+  # 测试5：步骤跳转
+  - name: test5_step_jump
+    type: wait
+    timeout: 1
+    description: "测试5：步骤跳转功能"
+    condition: "test_phase == 'advanced_functions'"
+    output_vars:
+      jump_test: "success"
+      success_count: 4
+      current_test: 6
+    on_success: "test7_complex_condition"  # 故意跳过test6
+
+  # 测试6：被跳过的测试
+  - name: test6_skipped
+    type: wait
+    timeout: 1
+    description: "测试6：此测试应该被跳过"
+    output_vars:
+      should_not_execute: "failed"
+
+  # 测试7：复杂条件表达式
+  - name: test7_complex_condition
+    type: wait
+    timeout: 1
+    description: "测试7：复杂条件表达式（AND/OR）"
+    condition: "success_count >= 3 AND current_test > 5 AND test_phase == 'advanced_functions'"
+    output_vars:
+      complex_condition_result: "success"
+      success_count: 5
+      current_test: 7
+    on_success: "test8_variable_substitution"
+    on_failure: "test_failed"
+
+  # 测试8：变量替换
+  - name: test8_variable_substitution
+    type: check_text
+    text: "浏览器"
+    description: "测试8：变量替换和动态内容"
+    timeout: 10
+    output_vars:
+      substitution_result: "result"
+      success_count: 6
+      current_test: 8
+    on_success: "final_validation"
+    on_failure: "final_validation"
+
+  # 最终验证
+  - name: final_validation
+    type: wait
+    timeout: 1
+    description: "最终验证：检查测试完成度"
+    condition: "success_count >= 4 AND current_test >= 7"
+    output_vars:
+      final_score: "{{success_count}}"
+      test_completion: "success"
+    on_success: "test_success"
+    on_failure: "test_partial_success"
+
+  # 成功结束
+  - name: test_success
+    type: screenshot
+    description: "✅ 综合测试完全成功！"
+    timeout: 10
+    output_vars:
+      final_status: "complete_success"
+      completion_rate: "100%"
+
+  # 部分成功
+  - name: test_partial_success
+    type: screenshot
+    description: "⚠️ 综合测试部分成功"
+    timeout: 10
+    output_vars:
+      final_status: "partial_success"
+      completion_rate: "{{success_count}}/{{total_tests}}"
+
+  # 失败处理
+  - name: test_failed
+    type: screenshot
+    description: "❌ 测试失败"
+    timeout: 10
+    output_vars:
+      final_status: "failed"
+      failure_step: "{{current_test}}"

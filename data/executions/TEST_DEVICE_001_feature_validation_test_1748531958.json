@@ -1,0 +1,99 @@
+{
+  "execution_id": "TEST_DEVICE_001_feature_validation_test_1748531958",
+  "script_name": "feature_validation_test",
+  "device_id": "TEST_DEVICE_001",
+  "variables": {
+    "current_score": 90,
+    "test_mode": "validation"
+  },
+  "current_step": 9,
+  "start_time": "2025-05-29T23:19:18.505453+08:00",
+  "status": "completed",
+  "results": [
+    {
+      "id": "TEST_DEVICE_001_feature_validation_test_1748531958_1748531958505544000",
+      "execution_id": "TEST_DEVICE_001_feature_validation_test_1748531958",
+      "command": "",
+      "status": "timeout",
+      "error": "command execution timeout",
+      "duration": 0,
+      "timestamp": 1748531968
+    },
+    {
+      "id": "TEST_DEVICE_001_feature_validation_test_1748531958_1748531968508619000",
+      "execution_id": "TEST_DEVICE_001_feature_validation_test_1748531958",
+      "command": "",
+      "status": "timeout",
+      "error": "command execution timeout",
+      "duration": 0,
+      "timestamp": 1748531969
+    },
+    {
+      "id": "TEST_DEVICE_001_feature_validation_test_1748531958_1748531969510637000",
+      "execution_id": "TEST_DEVICE_001_feature_validation_test_1748531958",
+      "command": "",
+      "status": "timeout",
+      "error": "command execution timeout",
+      "duration": 0,
+      "timestamp": 1748531970
+    },
+    {
+      "id": "TEST_DEVICE_001_feature_validation_test_1748531958_1748531970512178000",
+      "execution_id": "TEST_DEVICE_001_feature_validation_test_1748531958",
+      "command": "",
+      "status": "timeout",
+      "error": "command execution timeout",
+      "duration": 0,
+      "timestamp": 1748531971
+    },
+    {
+      "id": "TEST_DEVICE_001_feature_validation_test_1748531958_1748531971513846000",
+      "execution_id": "TEST_DEVICE_001_feature_validation_test_1748531958",
+      "command": "",
+      "status": "timeout",
+      "error": "command execution timeout",
+      "duration": 0,
+      "timestamp": 1748531972
+    },
+    {
+      "id": "TEST_DEVICE_001_feature_validation_test_1748531958_1748531972515531000",
+      "execution_id": "TEST_DEVICE_001_feature_validation_test_1748531958",
+      "command": "",
+      "status": "timeout",
+      "error": "command execution timeout",
+      "duration": 0,
+      "timestamp": 1748531973
+    },
+    {
+      "id": "TEST_DEVICE_001_feature_validation_test_1748531958_1748531973517751000",
+      "execution_id": "TEST_DEVICE_001_feature_validation_test_1748531958",
+      "command": "",
+      "status": "timeout",
+      "error": "command execution timeout",
+      "duration": 0,
+      "timestamp": 1748531983
+    },
+    {
+      "id": "TEST_DEVICE_001_feature_validation_test_1748531958_1748531983519496000",
+      "execution_id": "TEST_DEVICE_001_feature_validation_test_1748531958",
+      "command": "",
+      "status": "timeout",
+      "error": "command execution timeout",
+      "duration": 0,
+      "timestamp": 1748531993
+    }
+  ],
+  "runtime_vars": {
+    "current_score": 90,
+    "max_retries": 2,
+    "retry_count": 0,
+    "score_threshold": 75,
+    "test_mode": "validation",
+    "test_start_time": null
+  },
+  "step_outputs": {
+    "test_start": {
+      "test_start_time": null
+    }
+  }
+}

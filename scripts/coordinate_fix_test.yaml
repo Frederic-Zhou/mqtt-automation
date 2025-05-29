@@ -1,0 +1,111 @@
+name: coordinate_fix_test
+description: "坐标偏差修复测试脚本 - 验证中心坐标计算"
+version: "1.0"
+
+variables:
+  target_text: "设置"
+  backup_text: "浏览器"
+  click_threshold: 50
+
+steps:
+  - name: initial_screenshot
+    type: screenshot
+    description: "获取初始截图"
+    timeout: 10
+    output_vars:
+      initial_time: "timestamp"
+
+  - name: find_target_text
+    type: check_text
+    text: "{{target_text}}"
+    description: "查找目标文本并获取坐标信息"
+    timeout: 10
+    output_vars:
+      search_result: "result"
+      text_count: "text_info.length"
+      # 获取所有坐标信息用于验证
+      raw_x: "text_info[text='{{target_text}}'].left_x"  # 左上角X坐标
+      raw_y: "text_info[text='{{target_text}}'].top_y"   # 左上角Y坐标
+      center_x: "text_info[text='{{target_text}}'].x"     # 中心X坐标（修复后）
+      center_y: "text_info[text='{{target_text}}'].y"     # 中心Y坐标（修复后）
+      text_width: "text_info[text='{{target_text}}'].width"
+      text_height: "text_info[text='{{target_text}}'].height"
+    on_success: "validate_coordinates"
+    on_failure: "try_backup_text"
+
+  - name: validate_coordinates
+    type: wait
+    timeout: 1
+    description: "验证坐标计算是否正确"
+    condition: "center_x > raw_x AND center_y > raw_y"
+    output_vars:
+      coordinate_validation: "success"
+    on_success: "test_center_click"
+    on_failure: "coordinate_validation_failed"
+
+  - name: test_center_click
+    type: tap
+    x: "{{center_x}}"
+    y: "{{center_y}}"
+    description: "使用中心坐标进行点击测试"
+    timeout: 5
+    on_success: "verify_click_success"
+    on_failure: "click_failed"
+
+  - name: verify_click_success
+    type: screenshot
+    description: "验证点击操作的效果"
+    timeout: 10
+    output_vars:
+      final_time: "timestamp"
+    on_success: "test_completed"
+
+  - name: try_backup_text
+    type: check_text
+    text: "{{backup_text}}"
+    description: "备用文本搜索"
+    timeout: 10
+    output_vars:
+      backup_result: "result"
+      backup_center_x: "text_info[text='{{backup_text}}'].x"
+      backup_center_y: "text_info[text='{{backup_text}}'].y"
+    condition: "backup_result == 'success'"
+    on_success: "test_backup_click"
+    on_failure: "no_text_found"
+
+  - name: test_backup_click
+    type: tap
+    x: "{{backup_center_x}}"
+    y: "{{backup_center_y}}"
+    description: "使用备用文本中心坐标点击"
+    timeout: 5
+    on_success: "test_completed"
+    on_failure: "click_failed"
+
+  - name: coordinate_validation_failed
+    type: screenshot
+    description: "坐标验证失败，记录当前状态"
+    timeout: 10
+    output_vars:
+      error_type: "coordinate_validation_error"
+
+  - name: click_failed
+    type: screenshot
+    description: "点击操作失败，记录状态"
+    timeout: 10
+    output_vars:
+      error_type: "click_error"
+
+  - name: no_text_found
+    type: screenshot
+    description: "未找到任何目标文本"
+    timeout: 10
+    output_vars:
+      error_type: "text_not_found"
+
+  - name: test_completed
+    type: wait
+    timeout: 2
+    description: "测试完成，等待2秒"
+    output_vars:
+      test_status: "completed"

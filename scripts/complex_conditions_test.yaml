@@ -1,0 +1,114 @@
+name: complex_conditions_test
+description: "复杂条件表达式测试脚本"
+version: "1.0"
+
+variables:
+  search_text: "设置"
+  min_score: 80
+  max_attempts: 5
+  current_attempt: 1
+
+steps:
+  - name: initial_setup
+    type: screenshot
+    description: "初始设置和截图"
+    timeout: 10
+    output_vars:
+      start_time: "timestamp"
+
+  - name: primary_search
+    type: check_text
+    text: "{{search_text}}"
+    description: "主要文本搜索"
+    timeout: 10
+    output_vars:
+      search_result: "result"
+      found_count: "text_info.length"
+      target_x: "text_info[text='{{search_text}}'].x"
+      target_y: "text_info[text='{{search_text}}'].y"
+      confidence_score: "85"
+
+  - name: validate_search_quality
+    type: wait
+    timeout: 1
+    description: "验证搜索质量（复杂条件）"
+    condition: "search_result == 'success' AND found_count > 0 AND confidence_score >= {{min_score}}"
+    on_success: "proceed_with_click"
+    on_failure: "fallback_search"
+
+  - name: proceed_with_click
+    type: tap
+    x: "{{target_x}}"
+    y: "{{target_y}}"
+    description: "执行点击操作"
+    timeout: 5
+    condition: "target_x > 0 AND target_y > 0"
+    on_success: "verify_success"
+    on_failure: "handle_click_failure"
+
+  - name: verify_success
+    type: screenshot
+    description: "验证操作成功"
+    timeout: 10
+    on_success: "end"
+
+  - name: fallback_search
+    type: check_text
+    text: "浏览器"
+    description: "备用搜索方案"
+    timeout: 10
+    condition: "current_attempt <= {{max_attempts}}"
+    output_vars:
+      fallback_result: "result"
+      fallback_x: "text_info[text='浏览器'].x"
+      fallback_y: "text_info[text='浏览器'].y"
+      current_attempt: "{{current_attempt}} + 1"
+    on_success: "try_fallback_click"
+    on_failure: "final_attempt"
+
+  - name: try_fallback_click
+    type: tap
+    x: "{{fallback_x}}"
+    y: "{{fallback_y}}"
+    description: "尝试备用点击"
+    timeout: 5
+    condition: "fallback_result == 'success' AND fallback_x > 0"
+    on_success: "verify_fallback"
+    on_failure: "retry_search"
+
+  - name: verify_fallback
+    type: screenshot
+    description: "验证备用方案效果"
+    timeout: 10
+    on_success: "end"
+
+  - name: handle_click_failure
+    type: wait
+    timeout: 2
+    description: "处理点击失败"
+    output_vars:
+      current_attempt: "{{current_attempt}} + 1"
+    condition: "current_attempt < {{max_attempts}}"
+    on_success: "retry_search"
+    on_failure: "final_attempt"
+
+  - name: retry_search
+    type: check_text
+    text: "{{search_text}}"
+    description: "重试搜索"
+    timeout: 10
+    condition: "current_attempt <= {{max_attempts}}"
+    output_vars:
+      retry_result: "result"
+      retry_x: "text_info[0].x"
+      retry_y: "text_info[0].y"
+    on_success: "proceed_with_click"
+    on_failure: "final_attempt"
+
+  - name: final_attempt
+    type: screenshot
+    description: "最终尝试记录"
+    timeout: 10
+    output_vars:
+      end_time: "timestamp"
+      total_attempts: "{{current_attempt}}"
