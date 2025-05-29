@@ -396,7 +396,11 @@ func (c *Client) getScreenTextInfo() ([]models.TextPosition, error) {
 		textStart += i
 
 		// 查找 bounds=" 在同一个元素中
-		boundsStart := strings.Index(xmlContent[textStart:textStart+500], `bounds="`) // 限制搜索范围
+		searchEnd := textStart + 500
+		if searchEnd > len(xmlContent) {
+			searchEnd = len(xmlContent)
+		}
+		boundsStart := strings.Index(xmlContent[textStart:searchEnd], `bounds="`)
 		if boundsStart == -1 {
 			i = textStart + 6
 			continue

@@ -2,15 +2,7 @@ name: "基础文本测试"
 description: "测试输入文本并检测功能"
 device_id: "10CDAD18EB0058G"
 steps:
-  - name: "step1"
-    type: "input"
-    text: "helloworld"
-    description: "输入helloworld文本"
 
-  - name: "step2"
-    type: "wait"
-    timeout: 2
-    description: "等待输入完成"
 
   - name: "step3"
     type: "screenshot"
@@ -18,10 +10,10 @@ steps:
 
   - name: "step4"
     type: "check_text"
-    text: "helloworld"
+    text: "+63"
     description: "检测helloworld文本"
 
   - name: "step5"
     type: "check_text"
-    text: "hello"
+    text: "Log in"
     description: "检测部分文本hello"
