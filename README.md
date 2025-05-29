@@ -137,15 +137,81 @@ steps:
 
 ### 支持的命令类型
 
-| 命令类型 | 说明 | 参数 |
-|---------|------|------|
-| `screenshot` | 截取屏幕 | `timeout` |
-| `tap` | 点击坐标 | `x`, `y`, `timeout` |
-| `tap_text` | 点击文本 | `text`, `timeout` |
-| `input` | 输入文本 | `text` |
-| `check_text` | 检查文本存在 | `text`, `timeout` |
-| `shell` | 执行Shell命令 | `command`, `args` |
-| `wait` | 等待指定时间 | `wait` |
+系统支持以下7种预设命令类型，可以满足大部分移动端自动化需求：
+
+| 命令类型 | 说明 | 必需参数 | 可选参数 | 示例 |
+|---------|------|---------|---------|------|
+| `shell` | 执行Shell命令 | `command` | `args`, `timeout` | 获取系统信息、执行adb命令 |
+| `tap` | 精确坐标点击 | `x`, `y` | `timeout` | 点击屏幕指定位置 |
+| `tap_text` | 智能文本点击 | `text` | `timeout` | 自动查找并点击包含指定文字的元素 |
+| `input` | 文本输入 | `text` | - | 向当前焦点输入框输入文字 |
+| `screenshot` | 屏幕截图 | - | `timeout` | 获取当前屏幕截图和UI元素信息 |
+| `check_text` | 文本检测 | `text` | `timeout` | 检查屏幕是否包含指定文字 |
+| `wait` | 等待延时 | - | `timeout`(等待秒数) | 脚本执行暂停，避免操作过快 |
+
+#### 详细命令说明
+
+**1. shell 命令**
+```yaml
+- name: get_device_info
+  type: shell
+  command: "getprop ro.product.model"
+  timeout: 10
+  description: "获取设备型号"
+```
+
+**2. tap 命令**
+```yaml
+- name: click_button
+  type: tap
+  x: 500
+  y: 1000
+  timeout: 5
+  description: "点击屏幕坐标(500,1000)"
+```
+
+**3. tap_text 命令**
+```yaml
+- name: click_login
+  type: tap_text
+  text: "登录"
+  timeout: 10
+  description: "自动找到并点击'登录'按钮"
+```
+
+**4. input 命令**
+```yaml
+- name: enter_username
+  type: input
+  text: "{{username}}"
+  description: "输入用户名变量"
+```
+
+**5. screenshot 命令**
+```yaml
+- name: capture_screen
+  type: screenshot
+  timeout: 10
+  description: "截取当前屏幕并获取UI元素信息"
+```
+
+**6. check_text 命令**
+```yaml
+- name: verify_login_page
+  type: check_text
+  text: "请输入用户名"
+  timeout: 5
+  on_failure: end
+  description: "验证是否在登录页面"
+```
+
+**7. wait 命令**
+```yaml
+- name: pause_execution
+  type: wait
+  timeout: 3
+  description: "等待3秒"
+```
 
 ## 🌐 API接口
 

@@ -1,0 +1,40 @@
+name: my_custom_script
+description: "自定义测试脚本示例"
+version: "1.0"
+variables:
+  app_name: "MyApp"
+  wait_time: 2
+
+steps:
+  - name: "获取设备信息"
+    type: "shell"
+    command: "getprop ro.product.model"
+    timeout: 10
+    description: "获取设备型号信息"
+
+  - name: "检查应用是否安装"
+    type: "shell"
+    command: "pm list packages | grep {{app_name}}"
+    timeout: 15
+    description: "检查指定应用是否已安装"
+
+  - name: "等待系统响应"
+    type: "wait"
+    wait: "{{wait_time}}"
+    description: "等待系统响应"
+
+  - name: "获取屏幕截图"
+    type: "screenshot"
+    timeout: 10
+    description: "获取当前屏幕截图"
+
+  - name: "点击屏幕中心"
+    type: "tap"
+    x: 500
+    y: 1000
+    description: "点击屏幕中心位置"
+
+  - name: "输入测试文本"
+    type: "input"
+    text: "Hello {{app_name}}"
+    description: "输入包含变量的测试文本"

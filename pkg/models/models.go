@@ -13,7 +13,7 @@ type Command struct {
 	Timeout   int               `json:"timeout,omitempty"`   // 超时时间(秒)
 	Args      []string          `json:"args,omitempty"`      // 命令参数
 	Variables map[string]string `json:"variables,omitempty"` // 变量替换
-	SerialNo  string            `json:"serialno,omitempty"`  // 设备序列号
+	DeviceID  string            `json:"device_id,omitempty"` // 设备ID
 	Timestamp int64             `json:"timestamp,omitempty"`
 }
 

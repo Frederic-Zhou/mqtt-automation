@@ -193,7 +193,7 @@ func (se *ScriptEngine) executeSteps(executionID string, script *models.Script, 
 // executeCommand 执行单个命令
 func (se *ScriptEngine) executeCommand(executionID string, command *models.Command, deviceID string) (*models.Response, error) {
 	command.ID = fmt.Sprintf("%s_%d", executionID, time.Now().UnixNano())
-	command.SerialNo = deviceID
+	command.DeviceID = deviceID
 	command.Timestamp = time.Now().Unix()
 
 	// 发送命令到设备

@@ -19,7 +19,7 @@ import (
 
 // Client 手机端客户端
 type Client struct {
-	serialNo      string
+	deviceID      string
 	mqttClient    MQTT.Client
 	commandTopic  string
 	responseTopic string
@@ -27,8 +27,8 @@ type Client struct {
 
 // NewClient 创建新的客户端
 func NewClient() (*Client, error) {
-	serialNo, err := getSerialNo()
-	if err != nil || serialNo == "" {
+	deviceID, err := getDeviceID()
+	if err != nil || deviceID == "" {
 		return nil, fmt.Errorf("无法获取设备序列号: %v", err)
 	}
 
@@ -43,11 +43,11 @@ func NewClient() (*Client, error) {
 	username := os.Getenv("MQTT_USERNAME")
 	password := os.Getenv("MQTT_PASSWORD")
 
-	commandTopic := fmt.Sprintf("device/%s/command", serialNo)
-	responseTopic := fmt.Sprintf("device/%s/response", serialNo)
+	commandTopic := fmt.Sprintf("device/%s/command", deviceID)
+	responseTopic := fmt.Sprintf("device/%s/response", deviceID)
 
 	opts := MQTT.NewClientOptions().AddBroker(fmt.Sprintf("tcp://%s:%s", broker, port))
-	opts.SetClientID(fmt.Sprintf("device_%s_%d", serialNo, time.Now().Unix()))
+	opts.SetClientID(fmt.Sprintf("device_%s_%d", deviceID, time.Now().Unix()))
 
 	if username != "" {
 		opts.SetUsername(username)
@@ -55,7 +55,7 @@ func NewClient() (*Client, error) {
 	}
 
 	client := &Client{
-		serialNo:      serialNo,
+		deviceID:      deviceID,
 		commandTopic:  commandTopic,
 		responseTopic: responseTopic,
 	}
@@ -65,8 +65,8 @@ func NewClient() (*Client, error) {
 	return client, nil
 }
 
-// getSerialNo 获取设备序列号
-func getSerialNo() (string, error) {
+// getDeviceID 获取设备序列号
+func getDeviceID() (string, error) {
 	// 检查是否有模拟序列号（用于测试）
 	if mockSerial := os.Getenv("MOCK_SERIAL"); mockSerial != "" {
 		return mockSerial, nil
@@ -86,7 +86,7 @@ func (c *Client) Connect() error {
 		return fmt.Errorf("连接失败: %v", token.Error())
 	}
 
-	log.Printf("设备 %s 已连接到MQTT服务器", c.serialNo)
+	log.Printf("设备 %s 已连接到MQTT服务器", c.deviceID)
 
 	// 订阅命令主题
 	if token := c.mqttClient.Subscribe(c.commandTopic, 0, c.handleCommand); token.Wait() && token.Error() != nil {
@@ -441,7 +441,7 @@ func main() {
 		log.Fatalf("连接失败: %v", err)
 	}
 
-	log.Printf("设备 %s 已启动，等待命令...", client.serialNo)
+	log.Printf("设备 %s 已启动，等待命令...", client.deviceID)
 
 	// 优雅退出
 	c := make(chan os.Signal, 1)
