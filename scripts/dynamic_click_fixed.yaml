@@ -1,0 +1,39 @@
+name: dynamic_click_fixed
+description: "修复的动态坐标点击测试"
+version: "2.0"
+
+variables:
+  target_text: "设置"
+
+steps:
+  - name: initial_screenshot
+    type: screenshot
+    description: "获取初始截图"
+    timeout: 10
+
+  - name: find_target_text
+    type: check_text
+    text: "{{target_text}}"
+    description: "查找目标文本位置"
+    timeout: 10
+    output_vars:
+      found_status: "result"
+      text_x: "text_info[0].x"
+      text_y: "text_info[0].y"
+
+  - name: click_found_text
+    type: tap
+    x: "{{text_x}}"
+    y: "{{text_y}}"
+    description: "点击找到的文本位置（使用动态坐标）"
+    timeout: 5
+
+  - name: wait_after_click
+    type: wait
+    timeout: 3
+    description: "点击后等待页面加载"
+
+  - name: final_screenshot
+    type: screenshot
+    description: "获取点击后的截图"
+    timeout: 10

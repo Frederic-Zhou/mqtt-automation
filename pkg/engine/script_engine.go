@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -46,7 +46,7 @@ func (se *ScriptEngine) LoadScript(scriptName string) (*models.Script, error) {
 		scriptPath = "./scripts/examples.yaml"
 	}
 
-	data, err := ioutil.ReadFile(scriptPath)
+	data, err := os.ReadFile(scriptPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read script file: %v", err)
 	}
@@ -111,13 +111,21 @@ func (se *ScriptEngine) ExecuteScript(request *models.ScriptRequest) (*models.Sc
 	executionID := fmt.Sprintf("%s_%s_%d", request.DeviceID, request.ScriptName, time.Now().Unix())
 
 	context := &models.ExecutionContext{
+		ExecutionID: executionID,
 		ScriptName:  request.ScriptName,
 		DeviceID:    request.DeviceID,
 		Variables:   request.Variables,
+		RuntimeVars: make(map[string]interface{}),
+		StepOutputs: make(map[string]map[string]interface{}),
 		CurrentStep: 0,
 		StartTime:   time.Now(),
 		Status:      "running",
 		Results:     make([]models.Response, 0),
+	}
+
+	// 将运行时变量复制到RuntimeVars中
+	for k, v := range request.Variables {
+		context.RuntimeVars[k] = v
 	}
 
 	se.mu.Lock()
@@ -149,10 +157,37 @@ func (se *ScriptEngine) executeSteps(executionID string, script *models.Script, 
 
 		log.Printf("Executing step %d: %s", i, step.Name)
 
-		// 替换变量
-		command := se.replaceVariables(step, context.Variables)
+		// 检查条件执行
+		if step.Condition != "" && !se.evaluateCondition(step.Condition, context) {
+			log.Printf("Step %d skipped due to condition: %s", i, step.Condition)
+			continue
+		}
 
 		// 执行命令
+		command := &models.Command{
+			Type:    step.Type,
+			Command: step.Command,
+			Args:    step.Args,
+			Text:    step.Text,
+			Timeout: step.Timeout,
+		}
+		command.ExecutionID = executionID
+
+		// 处理X和Y坐标（从interface{}转换为int）
+		command.X = se.convertCoordinateToInt(step.X, context.RuntimeVars)
+		command.Y = se.convertCoordinateToInt(step.Y, context.RuntimeVars)
+
+		// 先进行基本的变量替换
+		if command.Text != "" {
+			command.Text = se.substituteVariables(command.Text, context.RuntimeVars)
+		}
+		if command.Command != "" {
+			command.Command = se.substituteVariables(command.Command, context.RuntimeVars)
+		}
+		for j, arg := range command.Args {
+			command.Args[j] = se.substituteVariables(arg, context.RuntimeVars)
+		}
+
 		response, err := se.executeCommand(executionID, command, context.DeviceID)
 		if err != nil {
 			context.Status = "failed"
@@ -161,6 +196,63 @@ func (se *ScriptEngine) executeSteps(executionID string, script *models.Script, 
 		}
 
 		context.Results = append(context.Results, *response)
+
+		// 处理步骤输出，更新RuntimeVars
+		se.processStepOutput(step, response, context)
+
+		// 如果这是tap命令且X或Y为0，尝试使用刚刚设置的变量
+		if command.Type == "tap" && (command.X == 0 || command.Y == 0) {
+			log.Printf("Post-processing tap command with dynamic coordinates")
+			log.Printf("Available variables after step output: %+v", context.RuntimeVars)
+
+			needReexecute := false
+
+			if command.X == 0 {
+				if xVar, exists := context.RuntimeVars["text_x"]; exists {
+					if xInt, ok := se.convertToInt(xVar); ok {
+						command.X = xInt
+						needReexecute = true
+						log.Printf("Updated X coordinate to: %d", xInt)
+					}
+				} else if xVar, exists := context.RuntimeVars["click_x"]; exists {
+					if xInt, ok := se.convertToInt(xVar); ok {
+						command.X = xInt
+						needReexecute = true
+						log.Printf("Updated X coordinate to: %d", xInt)
+					}
+				}
+			}
+
+			if command.Y == 0 {
+				if yVar, exists := context.RuntimeVars["text_y"]; exists {
+					if yInt, ok := se.convertToInt(yVar); ok {
+						command.Y = yInt
+						needReexecute = true
+						log.Printf("Updated Y coordinate to: %d", yInt)
+					}
+				} else if yVar, exists := context.RuntimeVars["click_y"]; exists {
+					if yInt, ok := se.convertToInt(yVar); ok {
+						command.Y = yInt
+						needReexecute = true
+						log.Printf("Updated Y coordinate to: %d", yInt)
+					}
+				}
+			}
+
+			// 如果坐标被更新，重新执行tap命令
+			if needReexecute && (command.X > 0 && command.Y > 0) {
+				log.Printf("Re-executing tap command with coordinates: (%d, %d)", command.X, command.Y)
+
+				retryResponse, retryErr := se.executeCommand(executionID, command, context.DeviceID)
+				if retryErr != nil {
+					log.Printf("Retry tap command failed: %v", retryErr)
+				} else {
+					// 替换原响应
+					context.Results[len(context.Results)-1] = *retryResponse
+					log.Printf("Tap command re-executed successfully")
+				}
+			}
+		}
 
 		// 检查步骤结果
 		if response.Status == "error" {
@@ -194,6 +286,7 @@ func (se *ScriptEngine) executeSteps(executionID string, script *models.Script, 
 func (se *ScriptEngine) executeCommand(executionID string, command *models.Command, deviceID string) (*models.Response, error) {
 	command.ID = fmt.Sprintf("%s_%d", executionID, time.Now().UnixNano())
 	command.DeviceID = deviceID
+	command.ExecutionID = executionID
 	command.Timestamp = time.Now().Unix()
 
 	// 发送命令到设备
@@ -219,11 +312,12 @@ func (se *ScriptEngine) executeCommand(executionID string, command *models.Comma
 		return se.waitForResponse(responseChan, command.ID, timeout)
 	case <-time.After(timeout):
 		return &models.Response{
-			ID:        command.ID,
-			Command:   command.Command,
-			Status:    "timeout",
-			Error:     "command execution timeout",
-			Timestamp: time.Now().Unix(),
+			ID:          command.ID,
+			ExecutionID: executionID,
+			Command:     command.Command,
+			Status:      "timeout",
+			Error:       "command execution timeout",
+			Timestamp:   time.Now().Unix(),
 		}, nil
 	}
 }
@@ -238,7 +332,7 @@ func (se *ScriptEngine) waitForResponse(responseChan chan models.Response, comma
 			if response.ID == commandID {
 				return &response, nil
 			}
-		case <-time.After(deadline.Sub(time.Now())):
+		case <-time.After(time.Until(deadline)):
 			return &models.Response{
 				ID:        commandID,
 				Status:    "timeout",
@@ -249,35 +343,6 @@ func (se *ScriptEngine) waitForResponse(responseChan chan models.Response, comma
 	}
 
 	return nil, fmt.Errorf("timeout waiting for response")
-}
-
-// replaceVariables 替换命令中的变量
-func (se *ScriptEngine) replaceVariables(step models.ScriptStep, variables map[string]interface{}) *models.Command {
-	command := &models.Command{
-		Type:    step.Type,
-		Command: step.Command,
-		Args:    step.Args,
-		X:       step.X,
-		Y:       step.Y,
-		Text:    step.Text,
-		Timeout: step.Timeout,
-	}
-
-	// 替换文本中的变量
-	if command.Text != "" {
-		command.Text = se.substituteVariables(command.Text, variables)
-	}
-
-	if command.Command != "" {
-		command.Command = se.substituteVariables(command.Command, variables)
-	}
-
-	// 替换参数中的变量
-	for i, arg := range command.Args {
-		command.Args[i] = se.substituteVariables(arg, variables)
-	}
-
-	return command
 }
 
 // substituteVariables 替换字符串中的变量
@@ -337,4 +402,262 @@ func (se *ScriptEngine) ListExecutions() map[string]*models.ExecutionContext {
 		result[id] = context
 	}
 	return result
+}
+
+// processStepOutput 处理步骤输出数据
+func (se *ScriptEngine) processStepOutput(step models.ScriptStep, response *models.Response, context *models.ExecutionContext) {
+	log.Printf("processStepOutput called for step: %s", step.Name)
+	log.Printf("Step OutputVars: %+v", step.OutputVars)
+
+	if len(step.OutputVars) == 0 {
+		log.Printf("No output vars defined for step: %s", step.Name)
+		return
+	}
+
+	stepOutputs := make(map[string]interface{})
+
+	// 处理不同类型的输出
+	for varName, outputPath := range step.OutputVars {
+		var value interface{}
+
+		switch outputPath {
+		case "result":
+			value = response.Result
+		case "status":
+			value = response.Status
+		case "error":
+			value = response.Error
+		case "screenshot":
+			value = response.Screenshot
+		default:
+			// 处理复杂的输出路径，如 "text_info[0].x"
+			log.Printf("Extracting value for path: %s", outputPath)
+			value = se.extractValue(response, outputPath)
+			log.Printf("Extracted value: %v", value)
+		}
+
+		stepOutputs[varName] = value
+		context.RuntimeVars[varName] = value
+		log.Printf("Step %s output: %s = %v", step.Name, varName, value)
+	}
+
+	if len(stepOutputs) > 0 {
+		context.StepOutputs[step.Name] = stepOutputs
+		log.Printf("RuntimeVars after processing: %+v", context.RuntimeVars)
+	}
+}
+
+// extractValue 从响应中提取指定路径的值
+func (se *ScriptEngine) extractValue(response *models.Response, path string) interface{} {
+	// 简化版本的路径提取，支持基本的路径如 "text_info[0].x"
+	parts := strings.Split(path, ".")
+
+	if len(parts) == 0 {
+		return nil
+	}
+
+	var current interface{} = response
+
+	for _, part := range parts {
+		// 处理数组索引，如 "text_info[0]"
+		if strings.Contains(part, "[") && strings.Contains(part, "]") {
+			// 提取字段名和索引
+			fieldEnd := strings.Index(part, "[")
+			field := part[:fieldEnd]
+			indexPart := part[fieldEnd+1 : len(part)-1]
+
+			// 获取字段值
+			current = se.getFieldValue(current, field)
+			if current == nil {
+				return nil
+			}
+
+			// 处理数组索引
+			if slice, ok := current.([]models.TextPosition); ok {
+				if idx := se.parseIndex(indexPart); idx >= 0 && idx < len(slice) {
+					current = slice[idx]
+				} else {
+					return nil
+				}
+			} else {
+				return nil
+			}
+		} else {
+			// 普通字段访问
+			current = se.getFieldValue(current, part)
+			if current == nil {
+				return nil
+			}
+		}
+	}
+
+	return current
+}
+
+// getFieldValue 获取结构体字段值
+func (se *ScriptEngine) getFieldValue(obj interface{}, field string) interface{} {
+	switch v := obj.(type) {
+	case *models.Response:
+		switch field {
+		case "result":
+			return v.Result
+		case "status":
+			return v.Status
+		case "error":
+			return v.Error
+		case "screenshot":
+			return v.Screenshot
+		case "text_info":
+			return v.TextInfo
+		case "output_data":
+			return v.OutputData
+		}
+	case models.TextPosition:
+		switch field {
+		case "text":
+			return v.Text
+		case "x":
+			return v.X
+		case "y":
+			return v.Y
+		case "width":
+			return v.Width
+		case "height":
+			return v.Height
+		}
+	}
+	return nil
+}
+
+// parseIndex 解析索引字符串
+func (se *ScriptEngine) parseIndex(indexStr string) int {
+	if indexStr == "" {
+		return -1
+	}
+
+	// 简单的数字解析
+	if indexStr == "0" {
+		return 0
+	} else if indexStr == "1" {
+		return 1
+	} else if indexStr == "2" {
+		return 2
+	} else if indexStr == "3" {
+		return 3
+	} else if indexStr == "4" {
+		return 4
+	} else if indexStr == "5" {
+		return 5
+	}
+	// 可以扩展支持更多索引或使用 strconv.Atoi
+	return -1
+}
+
+// evaluateCondition 评估条件表达式
+func (se *ScriptEngine) evaluateCondition(condition string, context *models.ExecutionContext) bool {
+	// 简化版本的条件评估
+	// 支持格式如: "var_name == 'value'" 或 "var_name != ''"
+
+	if condition == "" {
+		return true
+	}
+
+	// 处理简单的存在性检查，如 "found_text"
+	if !strings.Contains(condition, "==") && !strings.Contains(condition, "!=") {
+		value, exists := context.RuntimeVars[condition]
+		return exists && value != nil && value != ""
+	}
+
+	// 处理比较表达式
+	if strings.Contains(condition, "==") {
+		parts := strings.Split(condition, "==")
+		if len(parts) == 2 {
+			left := strings.TrimSpace(parts[0])
+			right := strings.Trim(strings.TrimSpace(parts[1]), "'\"")
+
+			if value, exists := context.RuntimeVars[left]; exists {
+				return fmt.Sprintf("%v", value) == right
+			}
+		}
+	} else if strings.Contains(condition, "!=") {
+		parts := strings.Split(condition, "!=")
+		if len(parts) == 2 {
+			left := strings.TrimSpace(parts[0])
+			right := strings.Trim(strings.TrimSpace(parts[1]), "'\"")
+
+			if value, exists := context.RuntimeVars[left]; exists {
+				return fmt.Sprintf("%v", value) != right
+			}
+		}
+	}
+
+	return false
+}
+
+// convertToInt 将interface{}转换为int
+func (se *ScriptEngine) convertToInt(value interface{}) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	case string:
+		// 尝试解析字符串为数字
+		if v == "" {
+			return 0, false
+		}
+
+		// 使用strconv.Atoi进行完整的字符串到数字转换
+		if num, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			return num, true
+		}
+
+		// 如果解析失败，记录日志
+		log.Printf("Warning: Failed to convert string '%s' to int", v)
+		return 0, false
+	default:
+		log.Printf("Warning: Cannot convert type %T to int", value)
+		return 0, false
+	}
+}
+
+// convertCoordinateToInt 将坐标值（可能是数字或变量字符串）转换为int
+func (se *ScriptEngine) convertCoordinateToInt(value interface{}, variables map[string]interface{}) int {
+	if value == nil {
+		return 0
+	}
+
+	switch v := value.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case string:
+		// 如果是空字符串，返回0
+		if v == "" {
+			return 0
+		}
+
+		// 如果是变量模板，先替换变量
+		if strings.Contains(v, "{{") && strings.Contains(v, "}}") {
+			substituted := se.substituteVariables(v, variables)
+			// 递归调用处理替换后的值
+			return se.convertCoordinateToInt(substituted, variables)
+		}
+
+		// 尝试直接解析为数字
+		if num, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			return num
+		}
+
+		log.Printf("Warning: Failed to convert coordinate string '%s' to int", v)
+		return 0
+	default:
+		log.Printf("Warning: Cannot convert coordinate type %T to int", value)
+		return 0
+	}
 }

@@ -250,7 +250,15 @@ func (c *Client) executeInputCommand(command *models.Command, response *models.R
 
 // executeScreenshotCommand 执行截图命令
 func (c *Client) executeScreenshotCommand(command *models.Command, response *models.Response) {
-	// 截图并保存
+	// 生成唯一的截图文件名
+	timestamp := time.Now().Format("20060102_150405")
+	screenshotName := fmt.Sprintf("screenshot_%s_%s.png", command.ExecutionID, timestamp)
+	localPath := fmt.Sprintf("./screenshots/%s", screenshotName)
+
+	// 确保截图目录存在
+	os.MkdirAll("./screenshots", 0755)
+
+	// 截图并保存到设备
 	screenshotPath := "/sdcard/screenshot.png"
 	cmd := exec.Command("adb", "shell", "screencap", "-p", screenshotPath)
 	if err := cmd.Run(); err != nil {
@@ -259,24 +267,21 @@ func (c *Client) executeScreenshotCommand(command *models.Command, response *mod
 		return
 	}
 
-	// 获取截图文件
-	cmd = exec.Command("adb", "pull", screenshotPath, "./screenshot.png")
+	// 获取截图文件到本地
+	cmd = exec.Command("adb", "pull", screenshotPath, localPath)
 	if err := cmd.Run(); err != nil {
 		response.Status = "error"
 		response.Error = fmt.Sprintf("获取截图失败: %v", err)
 		return
 	}
 
-	// 获取屏幕文本信息（使用uiautomator dump）
-	textInfo, err := c.getScreenTextInfo()
-	if err != nil {
-		log.Printf("获取屏幕文本信息失败: %v", err)
-	} else {
-		response.TextInfo = textInfo
-	}
+	// 清理设备上的临时文件
+	exec.Command("adb", "shell", "rm", screenshotPath).Run()
 
 	response.Result = "截图完成"
-	response.Screenshot = "screenshot.png" // 实际项目中可以返回base64编码的图片
+	response.Screenshot = localPath // 返回本地文件路径
+
+	log.Printf("截图已保存到: %s", localPath)
 }
 
 // executeCheckTextCommand 检查文本是否存在
@@ -364,9 +369,17 @@ func (c *Client) executeWaitCommand(command *models.Command, response *models.Re
 // getScreenTextInfo 获取屏幕文本信息
 func (c *Client) getScreenTextInfo() ([]models.TextPosition, error) {
 	// 使用uiautomator dump获取UI信息
+	// 注意：uiautomator dump可能会输出权限错误但仍然能生成XML文件
 	cmd := exec.Command("adb", "shell", "uiautomator", "dump", "/sdcard/ui.xml")
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("UI dump失败: %v", err)
+	err := cmd.Run()
+	if err != nil {
+		log.Printf("uiautomator dump警告: %v (继续尝试读取XML文件)", err)
+	}
+
+	// 检查XML文件是否存在
+	checkCmd := exec.Command("adb", "shell", "test", "-f", "/sdcard/ui.xml")
+	if err := checkCmd.Run(); err != nil {
+		return nil, fmt.Errorf("UI dump文件不存在: %v", err)
 	}
 
 	// 获取XML文件
