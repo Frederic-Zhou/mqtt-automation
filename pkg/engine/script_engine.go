@@ -256,6 +256,7 @@ func (se *ScriptEngine) replaceVariables(step models.ScriptStep, variables map[s
 	command := &models.Command{
 		Type:    step.Type,
 		Command: step.Command,
+		Args:    step.Args,
 		X:       step.X,
 		Y:       step.Y,
 		Text:    step.Text,
@@ -269,6 +270,11 @@ func (se *ScriptEngine) replaceVariables(step models.ScriptStep, variables map[s
 
 	if command.Command != "" {
 		command.Command = se.substituteVariables(command.Command, variables)
+	}
+
+	// 替换参数中的变量
+	for i, arg := range command.Args {
+		command.Args[i] = se.substituteVariables(arg, variables)
 	}
 
 	return command

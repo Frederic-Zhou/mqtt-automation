@@ -44,6 +44,7 @@ type ScriptStep struct {
 	Name        string            `json:"name"`                  // 步骤名称
 	Type        string            `json:"type"`                  // 命令类型
 	Command     string            `json:"command,omitempty"`     // 命令内容
+	Args        []string          `json:"args,omitempty"`        // 命令参数
 	X           int               `json:"x,omitempty"`           // 坐标X
 	Y           int               `json:"y,omitempty"`           // 坐标Y
 	Text        string            `json:"text,omitempty"`        // 文本内容

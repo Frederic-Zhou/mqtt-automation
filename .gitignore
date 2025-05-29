@@ -46,3 +46,4 @@ mosquitto_data/
 
 # Build artifacts
 dist/
+screenshot.png

@@ -1,0 +1,44 @@
+name: "Raw命令演示"
+description: "演示raw命令类型的使用"
+device_id: "10CDAD18EB0058G"
+commands:
+  - id: "step1"
+    type: "raw"
+    command: "adb"
+    args: ["devices"]
+    description: "使用raw命令查看ADB设备列表"
+
+  - id: "step2"
+    type: "raw"
+    command: "adb"
+    args: ["shell", "getprop", "ro.product.model"]
+    description: "使用raw命令获取设备型号"
+
+  - id: "step3"
+    type: "shell"
+    command: "getprop"
+    args: ["ro.product.model"]
+    description: "使用shell命令获取设备型号（对比）"
+
+  - id: "step4"
+    type: "raw"
+    command: "adb"
+    args: ["shell", "input", "text", "raw_test"]
+    description: "使用raw命令输入文本"
+
+  - id: "step5"
+    type: "input"
+    text: "shell_test"
+    description: "使用input命令输入文本（对比）"
+
+  - id: "step6"
+    type: "raw"
+    command: "adb"
+    args: ["shell", "uiautomator", "dump", "/sdcard/raw_test.xml"]
+    description: "使用raw命令生成UI dump"
+
+  - id: "step7"
+    type: "shell"
+    command: "cat"
+    args: ["/sdcard/raw_test.xml"]
+    description: "使用shell命令查看XML内容"

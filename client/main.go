@@ -127,6 +127,8 @@ func (c *Client) executeCommand(command *models.Command) *models.Response {
 	switch command.Type {
 	case "shell":
 		c.executeShellCommand(command, response)
+	case "raw":
+		c.executeRawCommand(command, response)
 	case "tap":
 		c.executeTapCommand(command, response)
 	case "input":
@@ -161,6 +163,37 @@ func (c *Client) executeShellCommand(command *models.Command, response *models.R
 		return
 	}
 
+	// 真机模式：使用adb shell执行命令
+	args := []string{"shell", command.Command}
+	if len(command.Args) > 0 {
+		args = append(args, command.Args...)
+	}
+
+	cmd := exec.Command("adb", args...)
+	output, err := cmd.CombinedOutput()
+
+	response.Result = string(output)
+	if err != nil {
+		response.Status = "error"
+		response.Error = err.Error()
+	}
+}
+
+// executeRawCommand 执行原始命令（不添加任何前缀）
+func (c *Client) executeRawCommand(command *models.Command, response *models.Response) {
+	if command.Command == "" {
+		response.Status = "error"
+		response.Error = "命令为空"
+		return
+	}
+
+	// 模拟模式处理
+	if os.Getenv("MOCK_SERIAL") != "" {
+		response.Result = fmt.Sprintf("模拟执行原始命令: %s %s", command.Command, strings.Join(command.Args, " "))
+		return
+	}
+
+	// 直接执行命令，不添加任何前缀
 	args := command.Args
 	if len(args) == 0 {
 		// 如果没有参数，使用shell执行
@@ -255,18 +288,30 @@ func (c *Client) executeCheckTextCommand(command *models.Command, response *mode
 		return
 	}
 
+	log.Printf("检测文本 '%s'，总共找到 %d 个文本元素", command.Text, len(textInfo))
+
 	found := false
-	for _, info := range textInfo {
+	var foundElements []string
+
+	for i, info := range textInfo {
+		log.Printf("元素 %d: 文本='%s', 坐标=(%d,%d), 尺寸=%dx%d",
+			i+1, info.Text, info.X, info.Y, info.Width, info.Height)
+
+		foundElements = append(foundElements, fmt.Sprintf("'%s'", info.Text))
+
 		if strings.Contains(info.Text, command.Text) {
 			found = true
 			response.Result = fmt.Sprintf("找到文本 '%s' 在坐标 (%d, %d)", command.Text, info.X, info.Y)
+			log.Printf("✓ 找到匹配文本: '%s' 包含 '%s'", info.Text, command.Text)
 			break
 		}
 	}
 
 	if !found {
 		response.Status = "error"
-		response.Error = fmt.Sprintf("未找到文本: %s", command.Text)
+		response.Error = fmt.Sprintf("未找到文本: %s。当前屏幕上的文本元素: %s",
+			command.Text, strings.Join(foundElements, ", "))
+		log.Printf("✗ 未找到文本 '%s'", command.Text)
 	}
 
 	response.TextInfo = textInfo
@@ -331,58 +376,95 @@ func (c *Client) getScreenTextInfo() ([]models.TextPosition, error) {
 		return nil, fmt.Errorf("读取UI信息失败: %v", err)
 	}
 
-	// 解析XML并提取文本位置信息
-	// 这里简化处理，实际项目中需要完整的XML解析
-	textPositions := []models.TextPosition{}
+	log.Printf("UI XML内容长度: %d 字节", len(output))
 
-	// 简单的文本提取示例
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		if strings.Contains(line, "text=") && strings.Contains(line, "bounds=") {
-			text := extractText(line)
-			x, y, width, height := extractBounds(line)
-			if text != "" {
-				textPositions = append(textPositions, models.TextPosition{
-					Text:   text,
-					X:      x,
-					Y:      y,
-					Width:  width,
-					Height: height,
-				})
-			}
+	// 解析XML并提取文本位置信息
+	textPositions := []models.TextPosition{}
+	xmlContent := string(output)
+
+	// 使用正则表达式或字符串搜索来查找text和bounds属性
+	// 这种方法更适合处理压缩的XML
+	textElementCount := 0
+
+	// 简单的字符串搜索方法
+	for i := 0; i < len(xmlContent); i++ {
+		// 查找 text=" 开始位置
+		textStart := strings.Index(xmlContent[i:], `text="`)
+		if textStart == -1 {
+			break
 		}
+		textStart += i
+
+		// 查找 bounds=" 在同一个元素中
+		boundsStart := strings.Index(xmlContent[textStart:textStart+500], `bounds="`) // 限制搜索范围
+		if boundsStart == -1 {
+			i = textStart + 6
+			continue
+		}
+		boundsStart += textStart
+
+		// 提取文本内容
+		text := extractTextFromPosition(xmlContent, textStart)
+		if text == "" {
+			i = textStart + 6
+			continue
+		}
+
+		// 提取坐标信息
+		x, y, width, height := extractBoundsFromPosition(xmlContent, boundsStart)
+		if x == 0 && y == 0 && width == 0 && height == 0 {
+			i = textStart + 6
+			continue
+		}
+
+		textElementCount++
+		log.Printf("发现文本元素 %d: '%s' 坐标=(%d,%d) 尺寸=%dx%d",
+			textElementCount, text, x, y, width, height)
+
+		textPositions = append(textPositions, models.TextPosition{
+			Text:   text,
+			X:      x,
+			Y:      y,
+			Width:  width,
+			Height: height,
+		})
+
+		i = textStart + 6 // 继续搜索
 	}
 
+	log.Printf("总共解析出 %d 个有效文本元素", textElementCount)
 	return textPositions, nil
 }
 
-// extractText 从XML行中提取文本
-func extractText(line string) string {
-	start := strings.Index(line, `text="`)
-	if start == -1 {
+// extractTextFromPosition 从指定位置提取文本内容
+func extractTextFromPosition(xmlContent string, textStart int) string {
+	start := textStart + 6 // 跳过 'text="'
+	if start >= len(xmlContent) {
 		return ""
 	}
-	start += 6
-	end := strings.Index(line[start:], `"`)
+
+	end := strings.Index(xmlContent[start:], `"`)
 	if end == -1 {
 		return ""
 	}
-	return line[start : start+end]
+
+	return xmlContent[start : start+end]
 }
 
-// extractBounds 从XML行中提取坐标信息
-func extractBounds(line string) (x, y, width, height int) {
-	start := strings.Index(line, `bounds="[`)
+// extractBoundsFromPosition 从指定位置提取坐标信息
+func extractBoundsFromPosition(xmlContent string, boundsStart int) (x, y, width, height int) {
+	start := strings.Index(xmlContent[boundsStart:], `"[`)
 	if start == -1 {
 		return 0, 0, 0, 0
 	}
-	start += 9
-	end := strings.Index(line[start:], `]"`)
+	start = boundsStart + start + 2 // 跳过 '"['
+
+	end := strings.Index(xmlContent[start:], `]"`)
 	if end == -1 {
 		return 0, 0, 0, 0
 	}
 
-	bounds := line[start : start+end]
+	bounds := xmlContent[start : start+end]
 	coords := strings.Split(bounds, "][")
 	if len(coords) != 2 {
 		return 0, 0, 0, 0
