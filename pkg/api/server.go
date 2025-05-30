@@ -1,75 +1,66 @@
 package api
 
 import (
-	"encoding/base64"
+	"fmt"
 	"net/http"
 	"time"
-
-	"mq_adb/pkg/models"
-	"mq_adb/pkg/ocr"
-	"mq_adb/pkg/scripts"
 
 	"github.com/gin-gonic/gin"
 )
 
-// GoScriptServer Go脚本API服务器
-type GoScriptServer struct {
-	engine *scripts.GoScriptEngine
-	router *gin.Engine
+// Server 服务端
+type Server struct {
+	router         *gin.Engine
+	commandService *CommandService
 }
 
-// NewGoScriptServer 创建新的Go脚本API服务器
-func NewGoScriptServer(scriptEngine *scripts.GoScriptEngine) *GoScriptServer {
+// NewServer 创建服务端
+func NewServer() (*Server, error) {
+	commandService, err := NewCommandService()
+	if err != nil {
+		return nil, err
+	}
+
 	router := gin.Default()
 
-	server := &GoScriptServer{
-		engine: scriptEngine,
-		router: router,
+	server := &Server{
+		router:         router,
+		commandService: commandService,
 	}
 
 	server.setupRoutes()
-	return server
+	return server, nil
 }
 
 // setupRoutes 设置路由
-func (s *GoScriptServer) setupRoutes() {
+func (s *Server) setupRoutes() {
 	api := s.router.Group("/api/v1")
 	{
-		// 脚本执行相关
-		api.POST("/execute", s.executeScript)
-		api.GET("/execution/:id", s.getExecutionStatus)
-		api.DELETE("/execution/:id", s.cancelExecution)
-		api.GET("/executions", s.listExecutions)
-		api.GET("/executions/history", s.getExecutionHistory)
+		// 基础命令API
+		api.POST("/command", s.executeCommand)
+		api.GET("/command/:id", s.getCommandStatus)
+		api.GET("/commands", s.listCommands)
+		api.DELETE("/command/:id", s.cancelCommand)
 
-		// 脚本管理相关
-		api.GET("/scripts", s.listScripts)
-		api.GET("/scripts/info", s.getScriptInfo)
-
-		// OCR 处理相关
-		api.POST("/ocr/process", s.processOCR)
-		api.POST("/ocr/process/:engine", s.processOCRWithEngine)
-		api.GET("/ocr/engines", s.getOCREngines)
-		api.GET("/ocr/engines/status", s.getOCREngineStatus)
-		api.POST("/ocr/engines/default", s.setDefaultOCREngine)
-
-		// 系统相关
+		// 系统API
 		api.GET("/health", s.healthCheck)
-		api.POST("/cleanup", s.cleanupExecutions)
+		api.POST("/cleanup", s.cleanupCommands)
 	}
 
-	// 静态文件服务（用于Web界面）
+	// 静态文件和Web界面
 	s.router.Static("/static", "./web/static")
 	s.router.LoadHTMLGlob("web/templates/*")
-
-	// Web界面
 	s.router.GET("/", s.webInterface)
-	s.router.GET("/web", s.webInterface)
 }
 
-// executeScript 执行脚本
-func (s *GoScriptServer) executeScript(c *gin.Context) {
-	var request models.ScriptRequest
+// executeCommand 执行命令（HTTP接口）
+func (s *Server) executeCommand(c *gin.Context) {
+	var request struct {
+		DeviceID string `json:"device_id" binding:"required"`
+		Command  string `json:"command" binding:"required"`
+		Timeout  int    `json:"timeout,omitempty"`
+	}
+
 	if err := c.ShouldBindJSON(&request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "Invalid request format",
@@ -78,55 +69,42 @@ func (s *GoScriptServer) executeScript(c *gin.Context) {
 		return
 	}
 
-	// 验证必填字段
-	if request.DeviceID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "device_id is required",
-		})
-		return
-	}
-
-	if request.ScriptName == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "script_name is required",
-		})
-		return
-	}
-
-	// 执行脚本
-	response, err := s.engine.ExecuteScript(&request)
+	// 调用命令服务
+	execution, err := s.commandService.ExecuteCommand(request.DeviceID, request.Command, request.Timeout)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "Script execution failed",
+			"error":   "Failed to execute command",
 			"details": err.Error(),
 		})
 		return
 	}
 
-	c.JSON(http.StatusOK, response)
+	c.JSON(http.StatusOK, gin.H{
+		"success":      true,
+		"execution_id": execution.ID,
+		"message":      "Command submitted successfully",
+	})
 }
 
-// getExecutionStatus 获取执行状态
-func (s *GoScriptServer) getExecutionStatus(c *gin.Context) {
-	executionID := c.Param("id")
+// getCommandStatus 获取命令状态
+func (s *Server) getCommandStatus(c *gin.Context) {
+	id := c.Param("id")
 
-	execution, err := s.engine.GetExecutionStatus(executionID)
-	if err != nil {
+	execution, exists := s.commandService.GetExecution(id)
+	if !exists {
 		c.JSON(http.StatusNotFound, gin.H{
-			"error":   "Execution not found",
-			"details": err.Error(),
+			"error": "Command execution not found",
 		})
 		return
 	}
 
 	// 构建响应
 	response := map[string]interface{}{
-		"id":          execution.ID,
-		"script_name": execution.ScriptName,
-		"device_id":   execution.DeviceID,
-		"variables":   execution.Variables,
-		"start_time":  execution.StartTime,
-		"status":      execution.Status,
+		"id":         execution.ID,
+		"device_id":  execution.DeviceID,
+		"command":    execution.Command,
+		"status":     execution.Status,
+		"start_time": execution.StartTime,
 	}
 
 	if execution.EndTime != nil {
@@ -136,44 +114,31 @@ func (s *GoScriptServer) getExecutionStatus(c *gin.Context) {
 		response["duration"] = time.Since(execution.StartTime).Milliseconds()
 	}
 
-	if execution.Result != nil {
-		response["result"] = execution.Result
+	if execution.Response != nil {
+		response["output"] = execution.Response.Output
+		response["response_status"] = execution.Response.Status
+	}
+
+	if execution.Error != "" {
+		response["error"] = execution.Error
 	}
 
 	c.JSON(http.StatusOK, response)
 }
 
-// cancelExecution 取消执行
-func (s *GoScriptServer) cancelExecution(c *gin.Context) {
-	executionID := c.Param("id")
+// listCommands 列出所有命令
+func (s *Server) listCommands(c *gin.Context) {
+	executions := s.commandService.ListExecutions()
 
-	err := s.engine.CancelExecution(executionID)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error":   "Execution not found or cannot be cancelled",
-			"details": err.Error(),
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"message": "Execution cancelled successfully",
-	})
-}
-
-// listExecutions 列出所有执行
-func (s *GoScriptServer) listExecutions(c *gin.Context) {
-	executions := s.engine.ListExecutions()
-
-	// 转换为更友好的格式
+	// 构建响应
 	result := make([]map[string]interface{}, 0, len(executions))
 	for _, execution := range executions {
 		item := map[string]interface{}{
-			"id":          execution.ID,
-			"script_name": execution.ScriptName,
-			"device_id":   execution.DeviceID,
-			"start_time":  execution.StartTime,
-			"status":      execution.Status,
+			"id":         execution.ID,
+			"device_id":  execution.DeviceID,
+			"command":    execution.Command,
+			"status":     execution.Status,
+			"start_time": execution.StartTime,
 		}
 
 		if execution.EndTime != nil {
@@ -183,295 +148,114 @@ func (s *GoScriptServer) listExecutions(c *gin.Context) {
 			item["duration"] = time.Since(execution.StartTime).Milliseconds()
 		}
 
-		if execution.Result != nil {
-			item["success"] = execution.Result.Success
-			item["message"] = execution.Result.Message
+		if execution.Response != nil {
+			item["output"] = execution.Response.Output
+		}
+
+		if execution.Error != "" {
+			item["error"] = execution.Error
 		}
 
 		result = append(result, item)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"executions": result,
-		"total":      len(result),
+		"commands": result,
+		"total":    len(result),
 	})
 }
 
-// getExecutionHistory 获取执行历史
-func (s *GoScriptServer) getExecutionHistory(c *gin.Context) {
-	limit := 50 // 默认返回最近50条记录
-	if l := c.Query("limit"); l != "" {
-		if parsed, err := scripts.ConvertCoordinateToInt(l); err == nil && parsed > 0 {
-			limit = parsed
-		}
-	}
+// cancelCommand 取消命令
+func (s *Server) cancelCommand(c *gin.Context) {
+	id := c.Param("id")
 
-	executions := s.engine.GetExecutionHistory(limit)
-
-	// 转换为API响应格式
-	result := make([]map[string]interface{}, 0, len(executions))
-	for _, execution := range executions {
-		item := map[string]interface{}{
-			"id":          execution.ID,
-			"script_name": execution.ScriptName,
-			"device_id":   execution.DeviceID,
-			"start_time":  execution.StartTime,
-			"status":      execution.Status,
-		}
-
-		if execution.EndTime != nil {
-			item["end_time"] = *execution.EndTime
-			item["duration"] = execution.EndTime.Sub(execution.StartTime).Milliseconds()
-		}
-
-		if execution.Result != nil {
-			item["success"] = execution.Result.Success
-			item["message"] = execution.Result.Message
-			if execution.Result.Error != "" {
-				item["error"] = execution.Result.Error
-			}
-		}
-
-		result = append(result, item)
+	err := s.commandService.CancelExecution(id)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": err.Error(),
+		})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"history": result,
-		"total":   len(result),
-		"limit":   limit,
+		"message": "Command cancelled successfully",
 	})
 }
 
-// listScripts 列出可用脚本
-func (s *GoScriptServer) listScripts(c *gin.Context) {
-	scripts := s.engine.ListAvailableScripts()
-
-	c.JSON(http.StatusOK, gin.H{
-		"scripts": scripts,
-		"total":   len(scripts),
-	})
-}
-
-// getScriptInfo 获取脚本信息
-func (s *GoScriptServer) getScriptInfo(c *gin.Context) {
-	scriptInfo := s.engine.GetScriptInfo()
-
-	c.JSON(http.StatusOK, gin.H{
-		"scripts": scriptInfo,
-		"total":   len(scriptInfo),
-	})
-}
-
-// processOCR 处理 OCR 请求
-func (s *GoScriptServer) processOCR(c *gin.Context) {
+// cleanupCommands 清理旧命令
+func (s *Server) cleanupCommands(c *gin.Context) {
 	var request struct {
-		ImageBase64 string `json:"image_base64" binding:"required"`
-		Languages   string `json:"languages,omitempty"`
+		MaxAgeMinutes int `json:"max_age_minutes"`
 	}
 
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "Invalid request format",
-			"details": err.Error(),
-		})
-		return
+	if err := c.ShouldBindJSON(&request); err != nil || request.MaxAgeMinutes <= 0 {
+		request.MaxAgeMinutes = 60 // 默认清理1小时前的记录
 	}
 
-	// 解码 base64 图像
-	imageData, err := base64.StdEncoding.DecodeString(request.ImageBase64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "Invalid base64 image data",
-			"details": err.Error(),
-		})
-		return
-	}
-
-	// 处理 OCR
-	languages := request.Languages
-	if languages == "" {
-		languages = "eng+chi_sim+jpn+kor" // 默认语言
-	}
-
-	textPositions, err := ocr.ProcessImage(imageData, languages)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "OCR processing failed",
-			"details": err.Error(),
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"success":        true,
-		"text_positions": textPositions,
-		"total_found":    len(textPositions),
-		"languages_used": languages,
-	})
-}
-
-// processOCRWithEngine 使用指定引擎处理 OCR 请求
-func (s *GoScriptServer) processOCRWithEngine(c *gin.Context) {
-	engineType := c.Param("engine")
-
-	var request struct {
-		ImageBase64 string `json:"image_base64" binding:"required"`
-		Languages   string `json:"languages,omitempty"`
-	}
-
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "Invalid request format",
-			"details": err.Error(),
-		})
-		return
-	}
-
-	// 解码 base64 图像
-	imageData, err := base64.StdEncoding.DecodeString(request.ImageBase64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "Invalid base64 image data",
-			"details": err.Error(),
-		})
-		return
-	}
-
-	// 处理 OCR
-	languages := request.Languages
-	if languages == "" {
-		languages = "eng+chi_sim+jpn+kor" // 默认语言
-	}
-
-	textPositions, err := ocr.ProcessImageWithEngine(imageData, engineType, languages)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "OCR processing failed",
-			"details": err.Error(),
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"success":        true,
-		"engine_used":    engineType,
-		"text_positions": textPositions,
-		"total_found":    len(textPositions),
-		"languages_used": languages,
-	})
-}
-
-// getOCREngines 获取可用的 OCR 引擎列表
-func (s *GoScriptServer) getOCREngines(c *gin.Context) {
-	engines := ocr.GetAvailableEngines()
-
-	c.JSON(http.StatusOK, gin.H{
-		"engines": engines,
-		"total":   len(engines),
-	})
-}
-
-// getOCREngineStatus 获取 OCR 引擎状态
-func (s *GoScriptServer) getOCREngineStatus(c *gin.Context) {
-	status := ocr.GetEngineStatus()
-
-	c.JSON(http.StatusOK, gin.H{
-		"status": status,
-	})
-}
-
-// setDefaultOCREngine 设置默认 OCR 引擎
-func (s *GoScriptServer) setDefaultOCREngine(c *gin.Context) {
-	var request struct {
-		Engine string `json:"engine" binding:"required"`
-	}
-
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "Invalid request format",
-			"details": err.Error(),
-		})
-		return
-	}
-
-	err := ocr.SetDefaultEngine(request.Engine)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "Failed to set default engine",
-			"details": err.Error(),
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"message":        "Default OCR engine updated successfully",
-		"default_engine": request.Engine,
-	})
-}
-
-// cleanupExecutions 清理旧的执行记录
-func (s *GoScriptServer) cleanupExecutions(c *gin.Context) {
-	var request struct {
-		MaxAgeHours int `json:"max_age_hours"`
-	}
-
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "Invalid request format",
-			"details": err.Error(),
-		})
-		return
-	}
-
-	if request.MaxAgeHours <= 0 {
-		request.MaxAgeHours = 24 // 默认清理24小时前的记录
-	}
-
-	maxAge := time.Duration(request.MaxAgeHours) * time.Hour
-	cleaned := s.engine.CleanupOldExecutions(maxAge)
+	cleaned := s.commandService.CleanupExecutions(request.MaxAgeMinutes)
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Cleanup completed",
 		"cleaned": cleaned,
-		"max_age": request.MaxAgeHours,
+		"max_age": request.MaxAgeMinutes,
 	})
 }
 
 // healthCheck 健康检查
-func (s *GoScriptServer) healthCheck(c *gin.Context) {
-	executions := s.engine.ListExecutions()
-	running := 0
-	for _, execution := range executions {
-		if execution.Status == "running" {
-			running++
-		}
-	}
+func (s *Server) healthCheck(c *gin.Context) {
+	stats := s.commandService.GetStats()
+	stats["status"] = "healthy"
 
-	c.JSON(http.StatusOK, gin.H{
-		"status":             "ok",
-		"timestamp":          time.Now().Unix(),
-		"version":            "2.0.0-go-scripts",
-		"script_engine":      "go",
-		"total_executions":   len(executions),
-		"running_executions": running,
-		"available_scripts":  len(s.engine.ListAvailableScripts()),
-	})
+	c.JSON(http.StatusOK, stats)
 }
 
 // webInterface Web界面
-func (s *GoScriptServer) webInterface(c *gin.Context) {
-	scripts := s.engine.ListAvailableScripts()
-	scriptInfo := s.engine.GetScriptInfo()
-
+func (s *Server) webInterface(c *gin.Context) {
 	c.HTML(http.StatusOK, "index.html", gin.H{
-		"title":       "Mobile Automation Server - Go Scripts",
-		"scripts":     scripts,
-		"script_info": scriptInfo,
-		"version":     "2.0.0",
+		"title": "移动设备自动化系统",
 	})
 }
 
+// ExecuteCommand 直接执行命令（编程接口）
+func (s *Server) ExecuteCommand(deviceID, command string, timeout int) (*CommandExecution, error) {
+	return s.commandService.ExecuteCommand(deviceID, command, timeout)
+}
+
+// GetExecution 获取执行状态（编程接口）
+func (s *Server) GetExecution(id string) (*CommandExecution, bool) {
+	return s.commandService.GetExecution(id)
+}
+
+// WaitForCompletion 等待命令完成（编程接口）
+func (s *Server) WaitForCompletion(id string, maxWait time.Duration) (*CommandExecution, error) {
+	startTime := time.Now()
+
+	for {
+		execution, exists := s.commandService.GetExecution(id)
+		if !exists {
+			return nil, fmt.Errorf("执行记录不存在")
+		}
+
+		if execution.Status == "completed" || execution.Status == "failed" || execution.Status == "timeout" || execution.Status == "cancelled" {
+			return execution, nil
+		}
+
+		if time.Since(startTime) > maxWait {
+			return execution, fmt.Errorf("等待超时")
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 // Run 启动服务器
-func (s *GoScriptServer) Run(addr string) error {
+func (s *Server) Run(addr string) error {
 	return s.router.Run(addr)
+}
+
+// Stop 停止服务器
+func (s *Server) Stop() {
+	if s.commandService != nil {
+		s.commandService.Stop()
+	}
 }
