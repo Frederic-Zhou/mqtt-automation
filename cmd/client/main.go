@@ -55,6 +55,7 @@ func NewClient() (*Client, error) {
 	}
 
 	// 设置MQTT选项
+	opts.SetClientID(serialNo)           // 使用设备序列号作为客户端ID
 	opts.SetCleanSession(true)           // 确保干净的会话
 	opts.SetAutoReconnect(true)          // 自动重连
 	opts.SetKeepAlive(60 * time.Second)  // 保持连接
