@@ -90,6 +90,13 @@ func (sr *ScriptRegistry) RegisterBuiltinScripts() {
 	sr.Register("check_text", CheckTextScript)
 	sr.Register("execute_shell", ExecuteShellScript)
 	sr.Register("click_coordinate", ClickCoordinateScript)
+
+	// 注册新的 OCR 增强脚本
+	sr.Register("screenshot_only", ScreenshotOnlyScript)
+	sr.Register("get_ui_text", GetUITextScript)
+	sr.Register("get_ocr_text", GetOCRTextScript)
+	sr.Register("check_text_enhanced", CheckTextEnhancedScript)
+	sr.Register("find_and_click_enhanced", FindAndClickEnhancedScript)
 }
 
 // GetScriptInfo 获取脚本信息
@@ -168,6 +175,49 @@ func (sr *ScriptRegistry) GetScriptInfo() []ScriptInfo {
 				"x":       "X坐标（必需）",
 				"y":       "Y坐标（必需）",
 				"timeout": "超时时间（秒），默认30",
+			},
+		},
+		// 新的 OCR 增强脚本
+		{
+			Name:        "screenshot_only",
+			Description: "仅截取屏幕截图，不进行UI分析",
+			Parameters: map[string]interface{}{
+				"save_path": "保存路径（可选）",
+			},
+		},
+		{
+			Name:        "get_ui_text",
+			Description: "获取UI结构文本信息",
+			Parameters: map[string]interface{}{
+				"timeout": "超时时间（秒），默认30",
+			},
+		},
+		{
+			Name:        "get_ocr_text",
+			Description: "使用OCR识别图像中的文本",
+			Parameters: map[string]interface{}{
+				"image_base64": "base64编码的图像数据（必需）",
+				"languages":    "语言设置，默认eng+chi_sim+jpn+kor",
+			},
+		},
+		{
+			Name:        "check_text_enhanced",
+			Description: "增强文本检测，支持UI和OCR双模式",
+			Parameters: map[string]interface{}{
+				"text":         "要检查的文本内容",
+				"required":     "是否必须存在，默认true",
+				"timeout":      "超时时间（秒），默认30",
+				"ocr_fallback": "是否启用OCR回退，默认true",
+			},
+		},
+		{
+			Name:        "find_and_click_enhanced",
+			Description: "增强查找和点击，支持UI和OCR双模式",
+			Parameters: map[string]interface{}{
+				"text":         "要查找的文本内容",
+				"timeout":      "超时时间（秒），默认30",
+				"required":     "是否必须找到，默认true",
+				"ocr_fallback": "是否启用OCR回退，默认true",
 			},
 		},
 	}

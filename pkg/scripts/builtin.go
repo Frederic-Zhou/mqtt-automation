@@ -490,3 +490,307 @@ func ClickCoordinateScript(ctx *ScriptContext, params map[string]interface{}) *S
 		"y": y,
 	}).WithDuration(time.Since(startTime))
 }
+
+// ScreenshotOnlyScript 纯截图脚本（不进行UI文本分析）
+func ScreenshotOnlyScript(ctx *ScriptContext, params map[string]interface{}) *ScriptResult {
+	startTime := time.Now()
+
+	ctx.Logger.Info("Taking screenshot only (no UI analysis)")
+
+	response, err := ctx.Client.ScreenshotOnly()
+	if err != nil {
+		return NewErrorResult("Failed to take screenshot", err).WithDuration(time.Since(startTime))
+	}
+
+	if response.Status != "success" {
+		return NewErrorResult("Screenshot failed: "+response.Error, nil).WithDuration(time.Since(startTime))
+	}
+
+	return NewSuccessResult("Screenshot taken successfully", map[string]interface{}{
+		"timestamp": time.Now().Unix(),
+	}).WithScreenshot(response.Screenshot).
+		WithDuration(time.Since(startTime))
+}
+
+// GetUITextScript UI文本提取脚本
+func GetUITextScript(ctx *ScriptContext, params map[string]interface{}) *ScriptResult {
+	startTime := time.Now()
+
+	ctx.Logger.Info("Extracting UI text information")
+
+	response, err := ctx.Client.GetUIText()
+	if err != nil {
+		return NewErrorResult("Failed to get UI text", err).WithDuration(time.Since(startTime))
+	}
+
+	if response.Status != "success" {
+		return NewErrorResult("Get UI text failed: "+response.Error, nil).WithDuration(time.Since(startTime))
+	}
+
+	return NewSuccessResult("UI text extracted successfully", map[string]interface{}{
+		"text_count": len(response.TextInfo),
+		"timestamp":  time.Now().Unix(),
+	}).WithTextInfo(response.TextInfo).
+		WithDuration(time.Since(startTime))
+}
+
+// GetOCRTextScript OCR文本提取脚本
+func GetOCRTextScript(ctx *ScriptContext, params map[string]interface{}) *ScriptResult {
+	startTime := time.Now()
+
+	ctx.Logger.Info("Extracting OCR text information")
+
+	// 先截图
+	screenshotResponse, err := ctx.Client.ScreenshotOnly()
+	if err != nil {
+		return NewErrorResult("Failed to take screenshot for OCR", err).WithDuration(time.Since(startTime))
+	}
+
+	if screenshotResponse.Status != "success" {
+		return NewErrorResult("Screenshot failed: "+screenshotResponse.Error, nil).WithDuration(time.Since(startTime))
+	}
+
+	// 进行OCR处理
+	response, err := ctx.Client.GetOCRText(screenshotResponse.Screenshot)
+	if err != nil {
+		return NewErrorResult("Failed to get OCR text", err).WithDuration(time.Since(startTime))
+	}
+
+	if response.Status != "success" {
+		return NewErrorResult("OCR failed: "+response.Error, nil).WithDuration(time.Since(startTime))
+	}
+
+	return NewSuccessResult("OCR text extracted successfully", map[string]interface{}{
+		"text_count": len(response.TextInfo),
+		"timestamp":  time.Now().Unix(),
+	}).WithScreenshot(screenshotResponse.Screenshot).
+		WithTextInfo(response.TextInfo).
+		WithDuration(time.Since(startTime))
+}
+
+// CheckTextEnhancedScript 增强的文本检查脚本（UI优先，OCR回退）
+func CheckTextEnhancedScript(ctx *ScriptContext, params map[string]interface{}) *ScriptResult {
+	startTime := time.Now()
+
+	// 获取参数
+	text, ok := params["text"].(string)
+	if !ok || text == "" {
+		return NewErrorResult("Missing required parameter: text", nil).WithDuration(time.Since(startTime))
+	}
+
+	timeout := ctx.GetIntVariable("timeout", 30)
+	if t, exists := params["timeout"]; exists {
+		if timeoutVal, err := ConvertCoordinateToInt(t); err == nil {
+			timeout = timeoutVal
+		}
+	}
+
+	useOCR := false
+	if ocr, exists := params["use_ocr"]; exists {
+		if ocrVal, ok := ocr.(bool); ok {
+			useOCR = ocrVal
+		}
+	}
+
+	ctx.Logger.Info("Enhanced text check for: '%s' (timeout: %ds, use_ocr: %v)", text, timeout, useOCR)
+
+	// 设置超时
+	ctx.Client.SetTimeout(timeout)
+
+	var foundInUI bool
+	var foundInOCR bool
+	var uiTextInfo []models.TextPosition
+	var ocrTextInfo []models.TextPosition
+	var screenshot string
+
+	// 第一步：尝试UI文本检测
+	uiResponse, err := ctx.Client.GetUIText()
+	if err == nil && uiResponse.Status == "success" {
+		uiTextInfo = uiResponse.TextInfo
+		for _, textInfo := range uiTextInfo {
+			if strings.Contains(strings.ToLower(textInfo.Text), strings.ToLower(text)) {
+				foundInUI = true
+				break
+			}
+		}
+	}
+
+	// 第二步：如果UI没找到且允许OCR，尝试OCR
+	if !foundInUI && useOCR {
+		ctx.Logger.Info("Text not found in UI, attempting OCR fallback")
+
+		// 截图
+		screenshotResponse, err := ctx.Client.ScreenshotOnly()
+		if err == nil && screenshotResponse.Status == "success" {
+			screenshot = screenshotResponse.Screenshot
+
+			// OCR处理
+			ocrResponse, err := ctx.Client.GetOCRText(screenshot)
+			if err == nil && ocrResponse.Status == "success" {
+				ocrTextInfo = ocrResponse.TextInfo
+				for _, textInfo := range ocrTextInfo {
+					if strings.Contains(strings.ToLower(textInfo.Text), strings.ToLower(text)) {
+						foundInOCR = true
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// 构建结果
+	allTextInfo := append(uiTextInfo, ocrTextInfo...)
+
+	if foundInUI || foundInOCR {
+		source := "ui"
+		if foundInOCR {
+			source = "ocr"
+		}
+
+		return NewSuccessResult(fmt.Sprintf("Text '%s' found via %s", text, source), map[string]interface{}{
+			"text":         text,
+			"found_in_ui":  foundInUI,
+			"found_in_ocr": foundInOCR,
+			"source":       source,
+		}).WithTextInfo(allTextInfo).
+			WithScreenshot(screenshot).
+			WithDuration(time.Since(startTime))
+	}
+
+	return NewErrorResult(fmt.Sprintf("Text '%s' not found in UI or OCR", text), nil).
+		WithTextInfo(allTextInfo).
+		WithScreenshot(screenshot).
+		WithDuration(time.Since(startTime))
+}
+
+// FindAndClickEnhancedScript 增强的查找并点击脚本（UI优先，OCR回退）
+func FindAndClickEnhancedScript(ctx *ScriptContext, params map[string]interface{}) *ScriptResult {
+	startTime := time.Now()
+
+	// 获取参数
+	text, ok := params["text"].(string)
+	if !ok || text == "" {
+		return NewErrorResult("Missing required parameter: text", nil).WithDuration(time.Since(startTime))
+	}
+
+	timeout := ctx.GetIntVariable("timeout", 30)
+	if t, exists := params["timeout"]; exists {
+		if timeoutVal, err := ConvertCoordinateToInt(t); err == nil {
+			timeout = timeoutVal
+		}
+	}
+
+	useOCR := false
+	if ocr, exists := params["use_ocr"]; exists {
+		if ocrVal, ok := ocr.(bool); ok {
+			useOCR = ocrVal
+		}
+	}
+
+	required := true
+	if r, exists := params["required"]; exists {
+		if reqVal, ok := r.(bool); ok {
+			required = reqVal
+		}
+	}
+
+	ctx.Logger.Info("Enhanced find and click for: '%s' (timeout: %ds, use_ocr: %v, required: %v)", text, timeout, useOCR, required)
+
+	// 设置超时
+	ctx.Client.SetTimeout(timeout)
+
+	var targetPos *models.TextPosition
+	var screenshot string
+	var allTextInfo []models.TextPosition
+	var foundSource string
+
+	// 第一步：尝试UI文本检测
+	uiResponse, err := ctx.Client.GetUIText()
+	if err == nil && uiResponse.Status == "success" {
+		allTextInfo = append(allTextInfo, uiResponse.TextInfo...)
+		for _, textInfo := range uiResponse.TextInfo {
+			if strings.Contains(strings.ToLower(textInfo.Text), strings.ToLower(text)) {
+				targetPos = &textInfo
+				foundSource = "ui"
+				break
+			}
+		}
+	}
+
+	// 第二步：如果UI没找到且允许OCR，尝试OCR
+	if targetPos == nil && useOCR {
+		ctx.Logger.Info("Text not found in UI, attempting OCR fallback")
+
+		// 截图
+		screenshotResponse, err := ctx.Client.ScreenshotOnly()
+		if err == nil && screenshotResponse.Status == "success" {
+			screenshot = screenshotResponse.Screenshot
+
+			// OCR处理
+			ocrResponse, err := ctx.Client.GetOCRText(screenshot)
+			if err == nil && ocrResponse.Status == "success" {
+				allTextInfo = append(allTextInfo, ocrResponse.TextInfo...)
+				for _, textInfo := range ocrResponse.TextInfo {
+					if strings.Contains(strings.ToLower(textInfo.Text), strings.ToLower(text)) {
+						targetPos = &textInfo
+						foundSource = "ocr"
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// 如果没找到文本
+	if targetPos == nil {
+		if required {
+			return NewErrorResult(fmt.Sprintf("Text '%s' not found on screen", text), nil).
+				WithScreenshot(screenshot).
+				WithTextInfo(allTextInfo).
+				WithDuration(time.Since(startTime))
+		} else {
+			return NewSuccessResult(fmt.Sprintf("Text '%s' not found, but not required", text), map[string]interface{}{
+				"text":   text,
+				"found":  false,
+				"source": "none",
+			}).WithScreenshot(screenshot).
+				WithTextInfo(allTextInfo).
+				WithDuration(time.Since(startTime))
+		}
+	}
+
+	// 计算点击位置（元素中心）
+	clickX := targetPos.X + targetPos.Width/2
+	clickY := targetPos.Y + targetPos.Height/2
+
+	ctx.Logger.Info("Found text '%s' via %s at (%d, %d), clicking at (%d, %d)",
+		text, foundSource, targetPos.X, targetPos.Y, clickX, clickY)
+
+	// 执行点击
+	response, err := ctx.Client.Tap(clickX, clickY)
+	if err != nil {
+		return NewErrorResult("Failed to tap", err).
+			WithScreenshot(screenshot).
+			WithTextInfo(allTextInfo).
+			WithDuration(time.Since(startTime))
+	}
+
+	if response.Status != "success" {
+		return NewErrorResult("Tap failed: "+response.Error, nil).
+			WithScreenshot(screenshot).
+			WithTextInfo(allTextInfo).
+			WithDuration(time.Since(startTime))
+	}
+
+	return NewSuccessResult(fmt.Sprintf("Successfully found and clicked text '%s' via %s", text, foundSource), map[string]interface{}{
+		"text":       text,
+		"click_x":    clickX,
+		"click_y":    clickY,
+		"found_x":    targetPos.X,
+		"found_y":    targetPos.Y,
+		"source":     foundSource,
+		"confidence": targetPos.Confidence,
+	}).WithScreenshot(screenshot).
+		WithTextInfo(allTextInfo).
+		WithDuration(time.Since(startTime))
+}

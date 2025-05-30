@@ -61,6 +61,15 @@ type ScriptClient interface {
 	// 截图
 	Screenshot() (*models.Response, error)
 
+	// 纯截图（不进行UI分析）
+	ScreenshotOnly() (*models.Response, error)
+
+	// 获取UI文本信息
+	GetUIText() (*models.Response, error)
+
+	// 获取OCR文本信息
+	GetOCRText(imageBase64 string) (*models.Response, error)
+
 	// 检查文本是否存在
 	CheckText(text string) (*models.Response, error)
 

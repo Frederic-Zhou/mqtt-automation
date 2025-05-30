@@ -1,10 +1,12 @@
 package api
 
 import (
+	"encoding/base64"
 	"net/http"
 	"time"
 
 	"mq_adb/pkg/models"
+	"mq_adb/pkg/ocr"
 	"mq_adb/pkg/scripts"
 
 	"github.com/gin-gonic/gin"
@@ -43,6 +45,13 @@ func (s *GoScriptServer) setupRoutes() {
 		// 脚本管理相关
 		api.GET("/scripts", s.listScripts)
 		api.GET("/scripts/info", s.getScriptInfo)
+
+		// OCR 处理相关
+		api.POST("/ocr/process", s.processOCR)
+		api.POST("/ocr/process/:engine", s.processOCRWithEngine)
+		api.GET("/ocr/engines", s.getOCREngines)
+		api.GET("/ocr/engines/status", s.getOCREngineStatus)
+		api.POST("/ocr/engines/default", s.setDefaultOCREngine)
 
 		// 系统相关
 		api.GET("/health", s.healthCheck)
@@ -250,6 +259,153 @@ func (s *GoScriptServer) getScriptInfo(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"scripts": scriptInfo,
 		"total":   len(scriptInfo),
+	})
+}
+
+// processOCR 处理 OCR 请求
+func (s *GoScriptServer) processOCR(c *gin.Context) {
+	var request struct {
+		ImageBase64 string `json:"image_base64" binding:"required"`
+		Languages   string `json:"languages,omitempty"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "Invalid request format",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	// 解码 base64 图像
+	imageData, err := base64.StdEncoding.DecodeString(request.ImageBase64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "Invalid base64 image data",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	// 处理 OCR
+	languages := request.Languages
+	if languages == "" {
+		languages = "eng+chi_sim+jpn+kor" // 默认语言
+	}
+
+	textPositions, err := ocr.ProcessImage(imageData, languages)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "OCR processing failed",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":        true,
+		"text_positions": textPositions,
+		"total_found":    len(textPositions),
+		"languages_used": languages,
+	})
+}
+
+// processOCRWithEngine 使用指定引擎处理 OCR 请求
+func (s *GoScriptServer) processOCRWithEngine(c *gin.Context) {
+	engineType := c.Param("engine")
+
+	var request struct {
+		ImageBase64 string `json:"image_base64" binding:"required"`
+		Languages   string `json:"languages,omitempty"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "Invalid request format",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	// 解码 base64 图像
+	imageData, err := base64.StdEncoding.DecodeString(request.ImageBase64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "Invalid base64 image data",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	// 处理 OCR
+	languages := request.Languages
+	if languages == "" {
+		languages = "eng+chi_sim+jpn+kor" // 默认语言
+	}
+
+	textPositions, err := ocr.ProcessImageWithEngine(imageData, engineType, languages)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "OCR processing failed",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":        true,
+		"engine_used":    engineType,
+		"text_positions": textPositions,
+		"total_found":    len(textPositions),
+		"languages_used": languages,
+	})
+}
+
+// getOCREngines 获取可用的 OCR 引擎列表
+func (s *GoScriptServer) getOCREngines(c *gin.Context) {
+	engines := ocr.GetAvailableEngines()
+
+	c.JSON(http.StatusOK, gin.H{
+		"engines": engines,
+		"total":   len(engines),
+	})
+}
+
+// getOCREngineStatus 获取 OCR 引擎状态
+func (s *GoScriptServer) getOCREngineStatus(c *gin.Context) {
+	status := ocr.GetEngineStatus()
+
+	c.JSON(http.StatusOK, gin.H{
+		"status": status,
+	})
+}
+
+// setDefaultOCREngine 设置默认 OCR 引擎
+func (s *GoScriptServer) setDefaultOCREngine(c *gin.Context) {
+	var request struct {
+		Engine string `json:"engine" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "Invalid request format",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	err := ocr.SetDefaultEngine(request.Engine)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "Failed to set default engine",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":        "Default OCR engine updated successfully",
+		"default_engine": request.Engine,
 	})
 }
 

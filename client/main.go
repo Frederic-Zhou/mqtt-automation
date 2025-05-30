@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -65,7 +67,7 @@ func NewClient() (*Client, error) {
 	return client, nil
 }
 
-// getSerialNo 获取设备序列号
+// ge ztSerialNo 获取设备序列号
 func getSerialNo() (string, error) {
 	// 检查是否有模拟序列号（用于测试）
 	if mockSerial := os.Getenv("MOCK_SERIAL"); mockSerial != "" {
@@ -133,6 +135,10 @@ func (c *Client) executeCommand(command *models.Command) *models.Response {
 		c.executeInputCommand(command, response)
 	case "screenshot":
 		c.executeScreenshotCommand(command, response)
+	case "screenshot_only":
+		c.executeScreenshotOnlyCommand(command, response)
+	case "get_ui_text":
+		c.executeGetUITextCommand(command, response)
 	case "check_text":
 		c.executeCheckTextCommand(command, response)
 	case "tap_text":
@@ -217,20 +223,11 @@ func (c *Client) executeInputCommand(command *models.Command, response *models.R
 
 // executeScreenshotCommand 执行截图命令
 func (c *Client) executeScreenshotCommand(command *models.Command, response *models.Response) {
-	// 截图并保存
-	screenshotPath := "/sdcard/screenshot.png"
-	cmd := exec.Command("adb", "shell", "screencap", "-p", screenshotPath)
-	if err := cmd.Run(); err != nil {
+	// 截图
+	screenshot, err := c.takeScreenshot()
+	if err != nil {
 		response.Status = "error"
 		response.Error = fmt.Sprintf("截图失败: %v", err)
-		return
-	}
-
-	// 获取截图文件
-	cmd = exec.Command("adb", "pull", screenshotPath, "./screenshot.png")
-	if err := cmd.Run(); err != nil {
-		response.Status = "error"
-		response.Error = fmt.Sprintf("获取截图失败: %v", err)
 		return
 	}
 
@@ -239,11 +236,16 @@ func (c *Client) executeScreenshotCommand(command *models.Command, response *mod
 	if err != nil {
 		log.Printf("获取屏幕文本信息失败: %v", err)
 	} else {
+		// 为UI文本添加源标识
+		for i := range textInfo {
+			textInfo[i].Source = "ui"
+			textInfo[i].Confidence = 100.0
+		}
 		response.TextInfo = textInfo
 	}
 
 	response.Result = "截图完成"
-	response.Screenshot = "screenshot.png" // 实际项目中可以返回base64编码的图片
+	response.Screenshot = screenshot
 }
 
 // executeCheckTextCommand 检查文本是否存在
@@ -318,18 +320,35 @@ func (c *Client) executeWaitCommand(command *models.Command, response *models.Re
 
 // getScreenTextInfo 获取屏幕文本信息
 func (c *Client) getScreenTextInfo() ([]models.TextPosition, error) {
-	// 使用uiautomator dump获取UI信息
-	cmd := exec.Command("adb", "shell", "uiautomator", "dump", "/sdcard/ui.xml")
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("UI dump失败: %v", err)
+	// 首先尝试使用uiautomator dump获取UI信息
+	// 设置超时
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "adb", "-s", c.serialNo, "shell", "uiautomator", "dump", "/sdcard/ui.xml")
+
+	// 执行命令，但忽略stderr错误，因为uiautomator可能会输出权限警告但仍然成功
+	_ = cmd.Run()
+
+	// 检查文件是否确实生成了
+	checkCmd := exec.Command("adb", "-s", c.serialNo, "shell", "test", "-f", "/sdcard/ui.xml")
+	if err := checkCmd.Run(); err != nil {
+		log.Printf("UI dump文件未生成，返回空结果")
+		return []models.TextPosition{}, nil
 	}
 
 	// 获取XML文件
-	cmd = exec.Command("adb", "shell", "cat", "/sdcard/ui.xml")
+	cmd = exec.Command("adb", "-s", c.serialNo, "shell", "cat", "/sdcard/ui.xml")
 	output, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("读取UI信息失败: %v", err)
+		log.Printf("读取UI信息失败: %v，返回空结果", err)
+		return []models.TextPosition{}, nil
 	}
+
+	// 清理临时文件
+	go func() {
+		cleanCmd := exec.Command("adb", "-s", c.serialNo, "shell", "rm", "/sdcard/ui.xml")
+		cleanCmd.Run()
+	}()
 
 	// 解析XML并提取文本位置信息
 	// 这里简化处理，实际项目中需要完整的XML解析
@@ -343,17 +362,89 @@ func (c *Client) getScreenTextInfo() ([]models.TextPosition, error) {
 			x, y, width, height := extractBounds(line)
 			if text != "" {
 				textPositions = append(textPositions, models.TextPosition{
-					Text:   text,
-					X:      x,
-					Y:      y,
-					Width:  width,
-					Height: height,
+					Text:       text,
+					X:          x,
+					Y:          y,
+					Width:      width,
+					Height:     height,
+					Source:     "ui",
+					Confidence: 100.0,
 				})
 			}
 		}
 	}
 
 	return textPositions, nil
+}
+
+// executeScreenshotOnlyCommand 执行纯截图命令（不进行UI分析）
+func (c *Client) executeScreenshotOnlyCommand(command *models.Command, response *models.Response) {
+	screenshot, err := c.takeScreenshot()
+	if err != nil {
+		response.Status = "error"
+		response.Error = fmt.Sprintf("截图失败: %v", err)
+		return
+	}
+
+	response.Screenshot = screenshot
+	response.Result = "截图成功"
+}
+
+// executeGetUITextCommand 执行UI文本提取命令
+func (c *Client) executeGetUITextCommand(command *models.Command, response *models.Response) {
+	textInfo, err := c.getScreenTextInfo()
+	if err != nil {
+		response.Status = "error"
+		response.Error = fmt.Sprintf("获取UI文本信息失败: %v", err)
+		return
+	}
+
+	// 为UI文本添加源标识
+	for i := range textInfo {
+		textInfo[i].Source = "ui"
+		textInfo[i].Confidence = 100.0 // UI文本被认为是100%可信的
+	}
+
+	response.TextInfo = textInfo
+	response.Result = fmt.Sprintf("提取到 %d 个UI文本元素", len(textInfo))
+}
+
+// takeScreenshot 执行截图并返回base64编码的图片
+func (c *Client) takeScreenshot() (string, error) {
+	// 截图并保存到设备
+	screenshotPath := "/sdcard/screenshot.png"
+
+	// 设置超时
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "adb", "-s", c.serialNo, "shell", "screencap", "-p", screenshotPath)
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("截图失败: %v", err)
+	}
+
+	// 获取截图文件到本地
+	localPath := "./temp_screenshot.png"
+	cmd = exec.CommandContext(ctx, "adb", "-s", c.serialNo, "pull", screenshotPath, localPath)
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("获取截图失败: %v", err)
+	}
+
+	// 读取图片文件并编码为base64
+	imageData, err := os.ReadFile(localPath)
+	if err != nil {
+		return "", fmt.Errorf("读取截图文件失败: %v", err)
+	}
+
+	// 清理临时文件
+	go func() {
+		os.Remove(localPath)
+		cleanCmd := exec.Command("adb", "-s", c.serialNo, "shell", "rm", screenshotPath)
+		cleanCmd.Run()
+	}()
+
+	// 返回base64编码的图片
+	return base64.StdEncoding.EncodeToString(imageData), nil
 }
 
 // extractText 从XML行中提取文本

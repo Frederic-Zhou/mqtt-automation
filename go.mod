@@ -5,6 +5,7 @@ go 1.23.3
 require (
 	github.com/eclipse/paho.mqtt.golang v1.5.0
 	github.com/gin-gonic/gin v1.10.1
+	github.com/otiai10/gosseract/v2 v2.4.1
 	github.com/spf13/cobra v1.9.1
 )
 

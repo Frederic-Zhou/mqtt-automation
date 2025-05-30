@@ -32,11 +32,13 @@ type Response struct {
 
 // TextPosition 表示屏幕上文本的位置
 type TextPosition struct {
-	Text   string `json:"text"`   // 文本内容
-	X      int    `json:"x"`      // X坐标
-	Y      int    `json:"y"`      // Y坐标
-	Width  int    `json:"width"`  // 宽度
-	Height int    `json:"height"` // 高度
+	Text       string  `json:"text"`                 // 文本内容
+	X          int     `json:"x"`                    // X坐标
+	Y          int     `json:"y"`                    // Y坐标
+	Width      int     `json:"width"`                // 宽度
+	Height     int     `json:"height"`               // 高度
+	Confidence float64 `json:"confidence,omitempty"` // OCR置信度 (0-100)
+	Source     string  `json:"source"`               // 文本来源: "ui" 或 "ocr"
 }
 
 // ScriptStep 表示脚本中的一个步骤
