@@ -1,16 +1,18 @@
 # 🚀 Mobile Automation Server
 
-基于MQTT的智能手机自动化脚本执行平台 - 您的第一个创业产品原型！
+基于MQTT的智能手机自动化脚本执行平台 - 现在支持强大的Go脚本模式！
 
 ## ✨ 功能特性
 
 - 🔄 **远程命令执行**: 通过MQTT协议远程控制手机设备
 - 📱 **多设备支持**: 同时管理多个Android设备
-- 📝 **YAML脚本**: 人性化的脚本编写格式
+- 🚀 **Go脚本模式**: 全新的Go函数脚本系统，类型安全、高性能
+- 📝 **双模式支持**: 同时支持传统YAML脚本和现代Go脚本
 - 🌐 **Web界面**: 现代化的Web控制台
 - 🔍 **屏幕识别**: 自动识别屏幕文本和UI元素
 - ⚡ **实时监控**: 实时查看脚本执行状态和结果
 - 🎯 **精确操作**: 支持点击、输入、截图等多种操作
+- 💡 **IDE支持**: Go脚本享受完整的IDE支持和代码提示
 
 ## 🏗️ 系统架构
 
@@ -90,127 +92,50 @@ cd mq_adb
    adb shell "cd /data/local/tmp && MQTT_BROKER=<server_ip> MQTT_USERNAME=user1 MQTT_PASSWORD=123456 ./mobile-client"
    ```
 
-## 📝 脚本编写
+## 📝 Go脚本系统
 
-### YAML脚本格式
+### 内置脚本
 
-```yaml
-name: login_demo
-description: 演示登录流程
-version: "1.0"
+系统使用Go语言编写的内置脚本，性能更好，功能更强大：
 
-# 全局变量
-variables:
-  username: ""
-  password: ""
+| 脚本名称 | 说明 | 参数 |
+|---------|------|------|
+| `screenshot` | 截取屏幕截图 | 无 |
+| `wait` | 等待指定秒数 | `seconds` |
+| `input_text` | 输入文本 | `text` |
+| `check_text` | 检查文本是否存在 | `text` |
+| `find_and_click` | 查找文本并点击 | `text` |
+| `smart_navigate` | 智能导航 | `target` |
+| `execute_shell` | 执行Shell命令 | `command` |
+| `login` | 登录操作 | `username`, `password` |
 
-# 执行步骤
-steps:
-  - name: take_screenshot
-    type: screenshot
-    description: 获取当前屏幕
-    timeout: 10
+### 脚本执行示例
 
-  - name: find_username_field
-    type: check_text
-    text: "用户名"
-    description: 查找用户名输入框
-    timeout: 5
-    on_failure: end
+```bash
+# 查看可用脚本
+curl http://localhost:8080/api/v1/scripts
 
-  - name: input_username
-    type: tap_text
-    text: "用户名"
-    description: 点击用户名框
-    
-  - name: type_username
-    type: input
-    text: "{{username}}"
-    description: 输入用户名
-    wait: 1
+# 执行等待脚本
+curl -X POST http://localhost:8080/api/v1/execute \
+  -H "Content-Type: application/json" \
+  -d '{
+    "device_id": "123456",
+    "script_name": "wait",
+    "variables": {
+      "seconds": 3
+    }
+  }'
 
-  - name: login
-    type: tap_text
-    text: "登录"
-    description: 点击登录按钮
-```
-
-### 支持的命令类型
-
-系统支持以下7种预设命令类型，可以满足大部分移动端自动化需求：
-
-| 命令类型 | 说明 | 必需参数 | 可选参数 | 示例 |
-|---------|------|---------|---------|------|
-| `shell` | 执行Shell命令 | `command` | `args`, `timeout` | 获取系统信息、执行adb命令 |
-| `tap` | 精确坐标点击 | `x`, `y` | `timeout` | 点击屏幕指定位置 |
-| `tap_text` | 智能文本点击 | `text` | `timeout` | 自动查找并点击包含指定文字的元素 |
-| `input` | 文本输入 | `text` | - | 向当前焦点输入框输入文字 |
-| `screenshot` | 屏幕截图 | - | `timeout` | 获取当前屏幕截图和UI元素信息 |
-| `check_text` | 文本检测 | `text` | `timeout` | 检查屏幕是否包含指定文字 |
-| `wait` | 等待延时 | - | `timeout`(等待秒数) | 脚本执行暂停，避免操作过快 |
-
-#### 详细命令说明
-
-**1. shell 命令**
-```yaml
-- name: get_device_info
-  type: shell
-  command: "getprop ro.product.model"
-  timeout: 10
-  description: "获取设备型号"
-```
-
-**2. tap 命令**
-```yaml
-- name: click_button
-  type: tap
-  x: 500
-  y: 1000
-  timeout: 5
-  description: "点击屏幕坐标(500,1000)"
-```
-
-**3. tap_text 命令**
-```yaml
-- name: click_login
-  type: tap_text
-  text: "登录"
-  timeout: 10
-  description: "自动找到并点击'登录'按钮"
-```
-
-**4. input 命令**
-```yaml
-- name: enter_username
-  type: input
-  text: "{{username}}"
-  description: "输入用户名变量"
-```
-
-**5. screenshot 命令**
-```yaml
-- name: capture_screen
-  type: screenshot
-  timeout: 10
-  description: "截取当前屏幕并获取UI元素信息"
-```
-
-**6. check_text 命令**
-```yaml
-- name: verify_login_page
-  type: check_text
-  text: "请输入用户名"
-  timeout: 5
-  on_failure: end
-  description: "验证是否在登录页面"
-```
-
-**7. wait 命令**
-```yaml
-- name: pause_execution
-  type: wait
-  timeout: 3
-  description: "等待3秒"
+# 执行查找点击脚本
+curl -X POST http://localhost:8080/api/v1/execute \
+  -H "Content-Type: application/json" \
+  -d '{
+    "device_id": "123456", 
+    "script_name": "find_and_click",
+    "variables": {
+      "text": "登录"
+    }
+  }'
 ```
 
 ## 🌐 API接口
@@ -290,24 +215,48 @@ mq_adb/
 ├── client/                # 手机客户端
 ├── pkg/
 │   ├── api/              # HTTP API
-│   ├── engine/           # 脚本引擎
+│   ├── engine/           # 脚本引擎(已弃用)
 │   ├── models/           # 数据模型
+│   ├── scripts/          # Go脚本引擎
 │   └── mqtt/             # MQTT客户端
-├── scripts/              # 脚本示例
 ├── web/templates/        # Web界面
 ├── build.sh             # 构建脚本
 └── start.sh             # 启动脚本
 ```
 
-### 添加新命令类型
+### 扩展Go脚本
 
-1. 在 `pkg/models/models.go` 中定义命令结构
-2. 在 `client/main.go` 中实现命令执行逻辑
-3. 在 `pkg/engine/script_engine.go` 中添加命令处理
+要添加新的Go脚本，需要在 `pkg/scripts/builtin.go` 中注册：
 
-### 自定义脚本
+```go
+func init() {
+    GlobalRegistry.Register("new_script", NewCustomScript())
+}
 
-创建新的YAML文件在 `scripts/` 目录下，或通过API动态加载。
+func NewCustomScript() ScriptInterface {
+    return &CustomScript{}
+}
+
+type CustomScript struct{}
+
+func (s *CustomScript) GetInfo() ScriptInfo {
+    return ScriptInfo{
+        Name:        "new_script",
+        Description: "自定义脚本描述",
+        Parameters: map[string]interface{}{
+            "param1": "参数描述",
+        },
+    }
+}
+
+func (s *CustomScript) Execute(ctx *ScriptContext, params map[string]interface{}) (*ScriptResult, error) {
+    // 脚本执行逻辑
+    return &ScriptResult{
+        Success: true,
+        Message: "执行成功",
+    }, nil
+}
+```
 
 ## 🚨 故障排除
 

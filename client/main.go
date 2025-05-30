@@ -19,7 +19,7 @@ import (
 
 // Client 手机端客户端
 type Client struct {
-	deviceID      string
+	serialNo      string
 	mqttClient    MQTT.Client
 	commandTopic  string
 	responseTopic string
@@ -27,8 +27,8 @@ type Client struct {
 
 // NewClient 创建新的客户端
 func NewClient() (*Client, error) {
-	deviceID, err := getDeviceID()
-	if err != nil || deviceID == "" {
+	serialNo, err := getSerialNo()
+	if err != nil || serialNo == "" {
 		return nil, fmt.Errorf("无法获取设备序列号: %v", err)
 	}
 
@@ -43,11 +43,11 @@ func NewClient() (*Client, error) {
 	username := os.Getenv("MQTT_USERNAME")
 	password := os.Getenv("MQTT_PASSWORD")
 
-	commandTopic := fmt.Sprintf("device/%s/command", deviceID)
-	responseTopic := fmt.Sprintf("device/%s/response", deviceID)
+	commandTopic := fmt.Sprintf("device/no_%s/command", serialNo)
+	responseTopic := fmt.Sprintf("device/no_%s/response", serialNo)
 
 	opts := MQTT.NewClientOptions().AddBroker(fmt.Sprintf("tcp://%s:%s", broker, port))
-	opts.SetClientID(fmt.Sprintf("device_%s_%d", deviceID, time.Now().Unix()))
+	opts.SetClientID(fmt.Sprintf("device_%s_%d", serialNo, time.Now().Unix()))
 
 	if username != "" {
 		opts.SetUsername(username)
@@ -55,7 +55,7 @@ func NewClient() (*Client, error) {
 	}
 
 	client := &Client{
-		deviceID:      deviceID,
+		serialNo:      serialNo,
 		commandTopic:  commandTopic,
 		responseTopic: responseTopic,
 	}
@@ -65,8 +65,8 @@ func NewClient() (*Client, error) {
 	return client, nil
 }
 
-// getDeviceID 获取设备序列号
-func getDeviceID() (string, error) {
+// getSerialNo 获取设备序列号
+func getSerialNo() (string, error) {
 	// 检查是否有模拟序列号（用于测试）
 	if mockSerial := os.Getenv("MOCK_SERIAL"); mockSerial != "" {
 		return mockSerial, nil
@@ -86,7 +86,7 @@ func (c *Client) Connect() error {
 		return fmt.Errorf("连接失败: %v", token.Error())
 	}
 
-	log.Printf("设备 %s 已连接到MQTT服务器", c.deviceID)
+	log.Printf("设备 %s 已连接到MQTT服务器", c.serialNo)
 
 	// 订阅命令主题
 	if token := c.mqttClient.Subscribe(c.commandTopic, 0, c.handleCommand); token.Wait() && token.Error() != nil {
@@ -127,8 +127,6 @@ func (c *Client) executeCommand(command *models.Command) *models.Response {
 	switch command.Type {
 	case "shell":
 		c.executeShellCommand(command, response)
-	case "raw":
-		c.executeRawCommand(command, response)
 	case "tap":
 		c.executeTapCommand(command, response)
 	case "input":
@@ -163,37 +161,6 @@ func (c *Client) executeShellCommand(command *models.Command, response *models.R
 		return
 	}
 
-	// 真机模式：使用adb shell执行命令
-	args := []string{"shell", command.Command}
-	if len(command.Args) > 0 {
-		args = append(args, command.Args...)
-	}
-
-	cmd := exec.Command("adb", args...)
-	output, err := cmd.CombinedOutput()
-
-	response.Result = string(output)
-	if err != nil {
-		response.Status = "error"
-		response.Error = err.Error()
-	}
-}
-
-// executeRawCommand 执行原始命令（不添加任何前缀）
-func (c *Client) executeRawCommand(command *models.Command, response *models.Response) {
-	if command.Command == "" {
-		response.Status = "error"
-		response.Error = "命令为空"
-		return
-	}
-
-	// 模拟模式处理
-	if os.Getenv("MOCK_SERIAL") != "" {
-		response.Result = fmt.Sprintf("模拟执行原始命令: %s %s", command.Command, strings.Join(command.Args, " "))
-		return
-	}
-
-	// 直接执行命令，不添加任何前缀
 	args := command.Args
 	if len(args) == 0 {
 		// 如果没有参数，使用shell执行
@@ -250,15 +217,7 @@ func (c *Client) executeInputCommand(command *models.Command, response *models.R
 
 // executeScreenshotCommand 执行截图命令
 func (c *Client) executeScreenshotCommand(command *models.Command, response *models.Response) {
-	// 生成唯一的截图文件名
-	timestamp := time.Now().Format("20060102_150405")
-	screenshotName := fmt.Sprintf("screenshot_%s_%s.png", command.ExecutionID, timestamp)
-	localPath := fmt.Sprintf("./screenshots/%s", screenshotName)
-
-	// 确保截图目录存在
-	os.MkdirAll("./screenshots", 0755)
-
-	// 截图并保存到设备
+	// 截图并保存
 	screenshotPath := "/sdcard/screenshot.png"
 	cmd := exec.Command("adb", "shell", "screencap", "-p", screenshotPath)
 	if err := cmd.Run(); err != nil {
@@ -267,21 +226,24 @@ func (c *Client) executeScreenshotCommand(command *models.Command, response *mod
 		return
 	}
 
-	// 获取截图文件到本地
-	cmd = exec.Command("adb", "pull", screenshotPath, localPath)
+	// 获取截图文件
+	cmd = exec.Command("adb", "pull", screenshotPath, "./screenshot.png")
 	if err := cmd.Run(); err != nil {
 		response.Status = "error"
 		response.Error = fmt.Sprintf("获取截图失败: %v", err)
 		return
 	}
 
-	// 清理设备上的临时文件
-	exec.Command("adb", "shell", "rm", screenshotPath).Run()
+	// 获取屏幕文本信息（使用uiautomator dump）
+	textInfo, err := c.getScreenTextInfo()
+	if err != nil {
+		log.Printf("获取屏幕文本信息失败: %v", err)
+	} else {
+		response.TextInfo = textInfo
+	}
 
 	response.Result = "截图完成"
-	response.Screenshot = localPath // 返回本地文件路径
-
-	log.Printf("截图已保存到: %s", localPath)
+	response.Screenshot = "screenshot.png" // 实际项目中可以返回base64编码的图片
 }
 
 // executeCheckTextCommand 检查文本是否存在
@@ -293,30 +255,18 @@ func (c *Client) executeCheckTextCommand(command *models.Command, response *mode
 		return
 	}
 
-	log.Printf("检测文本 '%s'，总共找到 %d 个文本元素", command.Text, len(textInfo))
-
 	found := false
-	var foundElements []string
-
-	for i, info := range textInfo {
-		log.Printf("元素 %d: 文本='%s', 坐标=(%d,%d), 尺寸=%dx%d",
-			i+1, info.Text, info.X, info.Y, info.Width, info.Height)
-
-		foundElements = append(foundElements, fmt.Sprintf("'%s'", info.Text))
-
+	for _, info := range textInfo {
 		if strings.Contains(info.Text, command.Text) {
 			found = true
 			response.Result = fmt.Sprintf("找到文本 '%s' 在坐标 (%d, %d)", command.Text, info.X, info.Y)
-			log.Printf("✓ 找到匹配文本: '%s' 包含 '%s'", info.Text, command.Text)
 			break
 		}
 	}
 
 	if !found {
 		response.Status = "error"
-		response.Error = fmt.Sprintf("未找到文本: %s。当前屏幕上的文本元素: %s",
-			command.Text, strings.Join(foundElements, ", "))
-		log.Printf("✗ 未找到文本 '%s'", command.Text)
+		response.Error = fmt.Sprintf("未找到文本: %s", command.Text)
 	}
 
 	response.TextInfo = textInfo
@@ -369,17 +319,9 @@ func (c *Client) executeWaitCommand(command *models.Command, response *models.Re
 // getScreenTextInfo 获取屏幕文本信息
 func (c *Client) getScreenTextInfo() ([]models.TextPosition, error) {
 	// 使用uiautomator dump获取UI信息
-	// 注意：uiautomator dump可能会输出权限错误但仍然能生成XML文件
 	cmd := exec.Command("adb", "shell", "uiautomator", "dump", "/sdcard/ui.xml")
-	err := cmd.Run()
-	if err != nil {
-		log.Printf("uiautomator dump警告: %v (继续尝试读取XML文件)", err)
-	}
-
-	// 检查XML文件是否存在
-	checkCmd := exec.Command("adb", "shell", "test", "-f", "/sdcard/ui.xml")
-	if err := checkCmd.Run(); err != nil {
-		return nil, fmt.Errorf("UI dump文件不存在: %v", err)
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("UI dump失败: %v", err)
 	}
 
 	// 获取XML文件
@@ -389,99 +331,58 @@ func (c *Client) getScreenTextInfo() ([]models.TextPosition, error) {
 		return nil, fmt.Errorf("读取UI信息失败: %v", err)
 	}
 
-	log.Printf("UI XML内容长度: %d 字节", len(output))
-
 	// 解析XML并提取文本位置信息
+	// 这里简化处理，实际项目中需要完整的XML解析
 	textPositions := []models.TextPosition{}
-	xmlContent := string(output)
 
-	// 使用正则表达式或字符串搜索来查找text和bounds属性
-	// 这种方法更适合处理压缩的XML
-	textElementCount := 0
-
-	// 简单的字符串搜索方法
-	for i := 0; i < len(xmlContent); i++ {
-		// 查找 text=" 开始位置
-		textStart := strings.Index(xmlContent[i:], `text="`)
-		if textStart == -1 {
-			break
+	// 简单的文本提取示例
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "text=") && strings.Contains(line, "bounds=") {
+			text := extractText(line)
+			x, y, width, height := extractBounds(line)
+			if text != "" {
+				textPositions = append(textPositions, models.TextPosition{
+					Text:   text,
+					X:      x,
+					Y:      y,
+					Width:  width,
+					Height: height,
+				})
+			}
 		}
-		textStart += i
-
-		// 查找 bounds=" 在同一个元素中
-		searchEnd := textStart + 500
-		if searchEnd > len(xmlContent) {
-			searchEnd = len(xmlContent)
-		}
-		boundsStart := strings.Index(xmlContent[textStart:searchEnd], `bounds="`)
-		if boundsStart == -1 {
-			i = textStart + 6
-			continue
-		}
-		boundsStart += textStart
-
-		// 提取文本内容
-		text := extractTextFromPosition(xmlContent, textStart)
-		if text == "" {
-			i = textStart + 6
-			continue
-		}
-
-		// 提取坐标信息
-		x, y, width, height := extractBoundsFromPosition(xmlContent, boundsStart)
-		if x == 0 && y == 0 && width == 0 && height == 0 {
-			i = textStart + 6
-			continue
-		}
-
-		textElementCount++
-		log.Printf("发现文本元素 %d: '%s' 坐标=(%d,%d) 尺寸=%dx%d",
-			textElementCount, text, x, y, width, height)
-
-		textPositions = append(textPositions, models.TextPosition{
-			Text:   text,
-			X:      x,
-			Y:      y,
-			Width:  width,
-			Height: height,
-		})
-
-		i = textStart + 6 // 继续搜索
 	}
 
-	log.Printf("总共解析出 %d 个有效文本元素", textElementCount)
 	return textPositions, nil
 }
 
-// extractTextFromPosition 从指定位置提取文本内容
-func extractTextFromPosition(xmlContent string, textStart int) string {
-	start := textStart + 6 // 跳过 'text="'
-	if start >= len(xmlContent) {
+// extractText 从XML行中提取文本
+func extractText(line string) string {
+	start := strings.Index(line, `text="`)
+	if start == -1 {
 		return ""
 	}
-
-	end := strings.Index(xmlContent[start:], `"`)
+	start += 6
+	end := strings.Index(line[start:], `"`)
 	if end == -1 {
 		return ""
 	}
-
-	return xmlContent[start : start+end]
+	return line[start : start+end]
 }
 
-// extractBoundsFromPosition 从指定位置提取坐标信息
-func extractBoundsFromPosition(xmlContent string, boundsStart int) (x, y, width, height int) {
-	start := strings.Index(xmlContent[boundsStart:], `"[`)
+// extractBounds 从XML行中提取坐标信息
+func extractBounds(line string) (x, y, width, height int) {
+	start := strings.Index(line, `bounds="[`)
 	if start == -1 {
 		return 0, 0, 0, 0
 	}
-	start = boundsStart + start + 2 // 跳过 '"['
-
-	end := strings.Index(xmlContent[start:], `]"`)
+	start += 9
+	end := strings.Index(line[start:], `]"`)
 	if end == -1 {
 		return 0, 0, 0, 0
 	}
 
-	bounds := xmlContent[start : start+end]
+	bounds := line[start : start+end]
 	coords := strings.Split(bounds, "][")
 	if len(coords) != 2 {
 		return 0, 0, 0, 0
@@ -540,7 +441,7 @@ func main() {
 		log.Fatalf("连接失败: %v", err)
 	}
 
-	log.Printf("设备 %s 已启动，等待命令...", client.deviceID)
+	log.Printf("设备 %s 已启动，等待命令...", client.serialNo)
 
 	// 优雅退出
 	c := make(chan os.Signal, 1)

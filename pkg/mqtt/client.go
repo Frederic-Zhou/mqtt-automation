@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"time"
 
+	"mq_adb/pkg/config"
 	"mq_adb/pkg/models"
 
 	MQTT "github.com/eclipse/paho.mqtt.golang"
@@ -20,31 +20,25 @@ type Client struct {
 
 // NewClient 创建新的MQTT客户端
 func NewClient() *Client {
-	broker := os.Getenv("MQTT_BROKER")
-	if broker == "" {
-		broker = "localhost"
-	}
-	port := os.Getenv("MQTT_PORT")
-	if port == "" {
-		port = "1883"
-	}
-	username := os.Getenv("MQTT_USERNAME")
-	password := os.Getenv("MQTT_PASSWORD")
+	cfg := config.LoadConfig()
 
-	opts := MQTT.NewClientOptions().AddBroker(fmt.Sprintf("tcp://%s:%s", broker, port))
+	brokerURL := fmt.Sprintf("tcp://%s:%s", cfg.MQTTBroker, cfg.MQTTPort)
+
+	opts := MQTT.NewClientOptions().AddBroker(brokerURL)
 	opts.SetClientID(fmt.Sprintf("server_%d", time.Now().Unix()))
 
-	if username != "" {
-		opts.SetUsername(username)
-		opts.SetPassword(password)
+	if cfg.MQTTUsername != "" {
+		opts.SetUsername(cfg.MQTTUsername)
+		opts.SetPassword(cfg.MQTTPassword)
 	}
 
-	client := &Client{}
-
+	// 设置连接选项
+	opts.SetKeepAlive(60 * time.Second)
 	opts.SetDefaultPublishHandler(func(client MQTT.Client, msg MQTT.Message) {
 		log.Printf("Received message: %s from topic: %s", msg.Payload(), msg.Topic())
 	})
 
+	client := &Client{}
 	client.client = MQTT.NewClient(opts)
 
 	return client
@@ -71,22 +65,18 @@ func (c *Client) SetResponseHandler(handler func(*models.Response)) {
 
 // SubscribeResponses 订阅所有设备的响应
 func (c *Client) SubscribeResponses() error {
-	topic := "device/+/response"
+	topic := "device/no_+/response"
 	token := c.client.Subscribe(topic, 0, func(client MQTT.Client, msg MQTT.Message) {
-		log.Printf("Raw MQTT message received on topic %s: %s", msg.Topic(), string(msg.Payload()))
-
 		var response models.Response
 		if err := json.Unmarshal(msg.Payload(), &response); err != nil {
 			log.Printf("Failed to unmarshal response: %v", err)
 			return
 		}
 
-		log.Printf("Parsed response - ID: %s, Status: %s", response.ID, response.Status)
+		log.Printf("Received response from device: %s", response.ID)
 
 		if c.responseHandler != nil {
 			c.responseHandler(&response)
-		} else {
-			log.Printf("No response handler set")
 		}
 	})
 

@@ -1,30 +1,26 @@
 package api
 
 import (
-	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
-	"mq_adb/pkg/engine"
 	"mq_adb/pkg/models"
+	"mq_adb/pkg/scripts"
 
 	"github.com/gin-gonic/gin"
 )
 
-// Server HTTP API服务器
-type Server struct {
-	engine *engine.ScriptEngine
+// GoScriptServer Go脚本API服务器
+type GoScriptServer struct {
+	engine *scripts.GoScriptEngine
 	router *gin.Engine
 }
 
-// NewServer 创建新的API服务器
-func NewServer(scriptEngine *engine.ScriptEngine) *Server {
+// NewGoScriptServer 创建新的Go脚本API服务器
+func NewGoScriptServer(scriptEngine *scripts.GoScriptEngine) *GoScriptServer {
 	router := gin.Default()
 
-	server := &Server{
+	server := &GoScriptServer{
 		engine: scriptEngine,
 		router: router,
 	}
@@ -34,30 +30,27 @@ func NewServer(scriptEngine *engine.ScriptEngine) *Server {
 }
 
 // setupRoutes 设置路由
-func (s *Server) setupRoutes() {
+func (s *GoScriptServer) setupRoutes() {
 	api := s.router.Group("/api/v1")
 	{
-		// 执行脚本
+		// 脚本执行相关
 		api.POST("/execute", s.executeScript)
-
-		// 获取执行状态
 		api.GET("/execution/:id", s.getExecutionStatus)
-
-		// 列出所有执行
+		api.DELETE("/execution/:id", s.cancelExecution)
 		api.GET("/executions", s.listExecutions)
+		api.GET("/executions/history", s.getExecutionHistory)
 
-		// 截图管理
-		api.POST("/screenshots/upload", s.uploadScreenshot)
-		api.GET("/screenshots/:filename", s.getScreenshot)
-		api.GET("/screenshots", s.listScreenshots)
+		// 脚本管理相关
+		api.GET("/scripts", s.listScripts)
+		api.GET("/scripts/info", s.getScriptInfo)
 
-		// 健康检查
+		// 系统相关
 		api.GET("/health", s.healthCheck)
+		api.POST("/cleanup", s.cleanupExecutions)
 	}
 
-	// 静态文件服务（用于Web界面和截图）
+	// 静态文件服务（用于Web界面）
 	s.router.Static("/static", "./web/static")
-	s.router.Static("/screenshots", "./screenshots")
 	s.router.LoadHTMLGlob("web/templates/*")
 
 	// Web界面
@@ -66,7 +59,7 @@ func (s *Server) setupRoutes() {
 }
 
 // executeScript 执行脚本
-func (s *Server) executeScript(c *gin.Context) {
+func (s *GoScriptServer) executeScript(c *gin.Context) {
 	var request models.ScriptRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -105,10 +98,10 @@ func (s *Server) executeScript(c *gin.Context) {
 }
 
 // getExecutionStatus 获取执行状态
-func (s *Server) getExecutionStatus(c *gin.Context) {
+func (s *GoScriptServer) getExecutionStatus(c *gin.Context) {
 	executionID := c.Param("id")
 
-	context, err := s.engine.GetExecutionStatus(executionID)
+	execution, err := s.engine.GetExecutionStatus(executionID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error":   "Execution not found",
@@ -117,194 +110,212 @@ func (s *Server) getExecutionStatus(c *gin.Context) {
 		return
 	}
 
-	// 计算持续时间
-	duration := time.Since(context.StartTime).Milliseconds()
-	if context.Status == "completed" || context.Status == "failed" {
-		// 如果已完成，使用最后一个结果的时间戳
-		if len(context.Results) > 0 {
-			lastResult := context.Results[len(context.Results)-1]
-			duration = lastResult.Timestamp*1000 - context.StartTime.UnixMilli()
-		}
+	// 构建响应
+	response := map[string]interface{}{
+		"id":          execution.ID,
+		"script_name": execution.ScriptName,
+		"device_id":   execution.DeviceID,
+		"variables":   execution.Variables,
+		"start_time":  execution.StartTime,
+		"status":      execution.Status,
 	}
 
-	response := &models.ScriptResponse{
-		ExecutionID: executionID,
-		Status:      context.Status,
-		StartTime:   context.StartTime,
-		Duration:    duration,
-		Results:     context.Results,
+	if execution.EndTime != nil {
+		response["end_time"] = *execution.EndTime
+		response["duration"] = execution.EndTime.Sub(execution.StartTime).Milliseconds()
+	} else {
+		response["duration"] = time.Since(execution.StartTime).Milliseconds()
+	}
+
+	if execution.Result != nil {
+		response["result"] = execution.Result
 	}
 
 	c.JSON(http.StatusOK, response)
 }
 
-// listExecutions 列出所有执行
-func (s *Server) listExecutions(c *gin.Context) {
-	executions := s.engine.ListExecutions()
+// cancelExecution 取消执行
+func (s *GoScriptServer) cancelExecution(c *gin.Context) {
+	executionID := c.Param("id")
+
+	err := s.engine.CancelExecution(executionID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error":   "Execution not found or cannot be cancelled",
+			"details": err.Error(),
+		})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"executions": executions,
+		"message": "Execution cancelled successfully",
+	})
+}
+
+// listExecutions 列出所有执行
+func (s *GoScriptServer) listExecutions(c *gin.Context) {
+	executions := s.engine.ListExecutions()
+
+	// 转换为更友好的格式
+	result := make([]map[string]interface{}, 0, len(executions))
+	for _, execution := range executions {
+		item := map[string]interface{}{
+			"id":          execution.ID,
+			"script_name": execution.ScriptName,
+			"device_id":   execution.DeviceID,
+			"start_time":  execution.StartTime,
+			"status":      execution.Status,
+		}
+
+		if execution.EndTime != nil {
+			item["end_time"] = *execution.EndTime
+			item["duration"] = execution.EndTime.Sub(execution.StartTime).Milliseconds()
+		} else {
+			item["duration"] = time.Since(execution.StartTime).Milliseconds()
+		}
+
+		if execution.Result != nil {
+			item["success"] = execution.Result.Success
+			item["message"] = execution.Result.Message
+		}
+
+		result = append(result, item)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"executions": result,
+		"total":      len(result),
+	})
+}
+
+// getExecutionHistory 获取执行历史
+func (s *GoScriptServer) getExecutionHistory(c *gin.Context) {
+	limit := 50 // 默认返回最近50条记录
+	if l := c.Query("limit"); l != "" {
+		if parsed, err := scripts.ConvertCoordinateToInt(l); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+
+	executions := s.engine.GetExecutionHistory(limit)
+
+	// 转换为API响应格式
+	result := make([]map[string]interface{}, 0, len(executions))
+	for _, execution := range executions {
+		item := map[string]interface{}{
+			"id":          execution.ID,
+			"script_name": execution.ScriptName,
+			"device_id":   execution.DeviceID,
+			"start_time":  execution.StartTime,
+			"status":      execution.Status,
+		}
+
+		if execution.EndTime != nil {
+			item["end_time"] = *execution.EndTime
+			item["duration"] = execution.EndTime.Sub(execution.StartTime).Milliseconds()
+		}
+
+		if execution.Result != nil {
+			item["success"] = execution.Result.Success
+			item["message"] = execution.Result.Message
+			if execution.Result.Error != "" {
+				item["error"] = execution.Result.Error
+			}
+		}
+
+		result = append(result, item)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"history": result,
+		"total":   len(result),
+		"limit":   limit,
+	})
+}
+
+// listScripts 列出可用脚本
+func (s *GoScriptServer) listScripts(c *gin.Context) {
+	scripts := s.engine.ListAvailableScripts()
+
+	c.JSON(http.StatusOK, gin.H{
+		"scripts": scripts,
+		"total":   len(scripts),
+	})
+}
+
+// getScriptInfo 获取脚本信息
+func (s *GoScriptServer) getScriptInfo(c *gin.Context) {
+	scriptInfo := s.engine.GetScriptInfo()
+
+	c.JSON(http.StatusOK, gin.H{
+		"scripts": scriptInfo,
+		"total":   len(scriptInfo),
+	})
+}
+
+// cleanupExecutions 清理旧的执行记录
+func (s *GoScriptServer) cleanupExecutions(c *gin.Context) {
+	var request struct {
+		MaxAgeHours int `json:"max_age_hours"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "Invalid request format",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	if request.MaxAgeHours <= 0 {
+		request.MaxAgeHours = 24 // 默认清理24小时前的记录
+	}
+
+	maxAge := time.Duration(request.MaxAgeHours) * time.Hour
+	cleaned := s.engine.CleanupOldExecutions(maxAge)
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Cleanup completed",
+		"cleaned": cleaned,
+		"max_age": request.MaxAgeHours,
 	})
 }
 
 // healthCheck 健康检查
-func (s *Server) healthCheck(c *gin.Context) {
+func (s *GoScriptServer) healthCheck(c *gin.Context) {
+	executions := s.engine.ListExecutions()
+	running := 0
+	for _, execution := range executions {
+		if execution.Status == "running" {
+			running++
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"status":    "ok",
-		"timestamp": time.Now().Unix(),
-		"version":   "1.0.0",
+		"status":             "ok",
+		"timestamp":          time.Now().Unix(),
+		"version":            "2.0.0-go-scripts",
+		"script_engine":      "go",
+		"total_executions":   len(executions),
+		"running_executions": running,
+		"available_scripts":  len(s.engine.ListAvailableScripts()),
 	})
 }
 
 // webInterface Web界面
-func (s *Server) webInterface(c *gin.Context) {
+func (s *GoScriptServer) webInterface(c *gin.Context) {
+	scripts := s.engine.ListAvailableScripts()
+	scriptInfo := s.engine.GetScriptInfo()
+
 	c.HTML(http.StatusOK, "index.html", gin.H{
-		"title": "Mobile Automation Server",
+		"title":       "Mobile Automation Server - Go Scripts",
+		"scripts":     scripts,
+		"script_info": scriptInfo,
+		"version":     "2.0.0",
 	})
 }
 
 // Run 启动服务器
-func (s *Server) Run(addr string) error {
+func (s *GoScriptServer) Run(addr string) error {
 	return s.router.Run(addr)
-}
-
-// uploadScreenshot 上传截图
-func (s *Server) uploadScreenshot(c *gin.Context) {
-	file, err := c.FormFile("screenshot")
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "No file uploaded",
-		})
-		return
-	}
-
-	// 获取上传参数
-	executionID := c.PostForm("execution_id")
-	stepName := c.PostForm("step_name")
-	deviceID := c.PostForm("device_id")
-
-	if executionID == "" || deviceID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "execution_id and device_id are required",
-		})
-		return
-	}
-
-	// 确保截图目录存在
-	screenshotDir := "./screenshots"
-	if err := os.MkdirAll(screenshotDir, 0755); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to create screenshot directory",
-		})
-		return
-	}
-
-	// 生成文件名
-	timestamp := time.Now().Format("20060102_150405")
-	filename := fmt.Sprintf("screenshot_%s_%s.png", executionID, timestamp)
-	localPath := filepath.Join(screenshotDir, filename)
-
-	// 保存文件
-	if err := c.SaveUploadedFile(file, localPath); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to save file",
-		})
-		return
-	}
-
-	// 获取文件信息
-	fileInfo, err := os.Stat(localPath)
-	var fileSize int64 = 0
-	if err == nil {
-		fileSize = fileInfo.Size()
-	}
-
-	// 创建截图信息
-	screenshotInfo := &models.ScreenshotInfo{
-		ExecutionID: executionID,
-		StepName:    stepName,
-		DeviceID:    deviceID,
-		Filename:    filename,
-		LocalPath:   localPath,
-		ServerURL:   fmt.Sprintf("/api/v1/screenshots/%s", filename),
-		Timestamp:   time.Now(),
-		FileSize:    fileSize,
-	}
-
-	c.JSON(http.StatusOK, screenshotInfo)
-}
-
-// getScreenshot 获取截图
-func (s *Server) getScreenshot(c *gin.Context) {
-	filename := c.Param("filename")
-
-	// 验证文件名安全性
-	if strings.Contains(filename, "..") || strings.Contains(filename, "/") {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid filename",
-		})
-		return
-	}
-
-	filepath := filepath.Join("./screenshots", filename)
-	if _, err := os.Stat(filepath); os.IsNotExist(err) {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": "Screenshot not found",
-		})
-		return
-	}
-
-	c.File(filepath)
-}
-
-// listScreenshots 列出截图
-func (s *Server) listScreenshots(c *gin.Context) {
-	executionID := c.Query("execution_id")
-
-	screenshotDir := "./screenshots"
-	files, err := os.ReadDir(screenshotDir)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to read screenshot directory",
-		})
-		return
-	}
-
-	var screenshots []models.ScreenshotInfo
-	for _, file := range files {
-		if file.IsDir() {
-			continue
-		}
-
-		filename := file.Name()
-		if !strings.HasSuffix(filename, ".png") {
-			continue
-		}
-
-		// 如果指定了executionID，则过滤
-		if executionID != "" && !strings.Contains(filename, executionID) {
-			continue
-		}
-
-		info, err := file.Info()
-		var fileSize int64 = 0
-		var timestamp time.Time = time.Now()
-		if err == nil {
-			fileSize = info.Size()
-			timestamp = info.ModTime()
-		}
-
-		screenshots = append(screenshots, models.ScreenshotInfo{
-			Filename:  filename,
-			LocalPath: filepath.Join(screenshotDir, filename),
-			ServerURL: fmt.Sprintf("/api/v1/screenshots/%s", filename),
-			Timestamp: timestamp,
-			FileSize:  fileSize,
-		})
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"screenshots": screenshots,
-		"count":       len(screenshots),
-	})
 }
