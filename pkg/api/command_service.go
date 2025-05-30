@@ -6,8 +6,12 @@ import (
 	"time"
 
 	"mq_adb/pkg/models"
-	"mq_adb/pkg/scripts"
+	"mq_adb/pkg/mqtt"
+	"mq_adb/pkg/script"
 )
+
+// CommandResponseInterface 定义响应接口
+type CommandResponseInterface = script.CommandResponseInterface
 
 // CommandExecution 命令执行状态
 type CommandExecution struct {
@@ -22,16 +26,43 @@ type CommandExecution struct {
 	Error     string           `json:"error,omitempty"`
 }
 
+// 实现script.CommandExecutionInterface接口
+func (c *CommandExecution) GetID() string           { return c.ID }
+func (c *CommandExecution) GetDeviceID() string     { return c.DeviceID }
+func (c *CommandExecution) GetCommand() string      { return c.Command }
+func (c *CommandExecution) GetStatus() string       { return c.Status }
+func (c *CommandExecution) GetStartTime() time.Time { return c.StartTime }
+func (c *CommandExecution) GetEndTime() *time.Time  { return c.EndTime }
+func (c *CommandExecution) GetError() string        { return c.Error }
+
+// GetResponse 获取响应（实现接口）
+func (c *CommandExecution) GetResponse() script.CommandResponseInterface {
+	if c.Response == nil {
+		return nil
+	}
+	return &ResponseWrapper{c.Response}
+}
+
+// ResponseWrapper 包装models.Response以实现接口
+type ResponseWrapper struct {
+	*models.Response
+}
+
+func (r *ResponseWrapper) GetOutput() string  { return r.Output }
+func (r *ResponseWrapper) GetStatus() string  { return r.Status }
+func (r *ResponseWrapper) GetDuration() int64 { return r.Duration }
+func (r *ResponseWrapper) GetError() string   { return r.Error }
+
 // CommandService 命令执行服务
 type CommandService struct {
-	client     *scripts.MQTTClient
+	client     *mqtt.Client
 	executions map[string]*CommandExecution
 	mutex      sync.RWMutex
 }
 
 // NewCommandService 创建命令服务
 func NewCommandService() (*CommandService, error) {
-	client, err := scripts.NewMQTTClient()
+	client, err := mqtt.NewClient()
 	if err != nil {
 		return nil, fmt.Errorf("创建MQTT客户端失败: %v", err)
 	}
@@ -218,5 +249,27 @@ func (s *CommandService) GetStats() map[string]interface{} {
 func (s *CommandService) Stop() {
 	if s.client != nil {
 		s.client.Disconnect()
+	}
+}
+
+// WaitForCompletion 等待命令完成
+func (s *CommandService) WaitForCompletion(id string, maxWait time.Duration) (*CommandExecution, error) {
+	startTime := time.Now()
+
+	for {
+		execution, exists := s.GetExecution(id)
+		if !exists {
+			return nil, fmt.Errorf("执行记录不存在")
+		}
+
+		if execution.Status == "completed" || execution.Status == "failed" || execution.Status == "timeout" || execution.Status == "cancelled" {
+			return execution, nil
+		}
+
+		if time.Since(startTime) > maxWait {
+			return execution, fmt.Errorf("等待超时")
+		}
+
+		time.Sleep(100 * time.Millisecond)
 	}
 }

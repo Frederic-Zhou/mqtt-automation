@@ -1,9 +1,10 @@
 package api
 
 import (
-	"fmt"
 	"net/http"
 	"time"
+
+	"mq_adb/pkg/script"
 
 	"github.com/gin-gonic/gin"
 )
@@ -12,7 +13,11 @@ import (
 type Server struct {
 	router         *gin.Engine
 	commandService *CommandService
+	scriptService  *ScriptService
 }
+
+// 确保Server实现script.CommandExecutor接口
+var _ script.CommandExecutor = (*Server)(nil)
 
 // NewServer 创建服务端
 func NewServer() (*Server, error) {
@@ -28,6 +33,9 @@ func NewServer() (*Server, error) {
 		commandService: commandService,
 	}
 
+	// 创建脚本服务（Server实现了CommandExecutor接口）
+	server.scriptService = NewScriptService(server)
+
 	server.setupRoutes()
 	return server, nil
 }
@@ -41,6 +49,10 @@ func (s *Server) setupRoutes() {
 		api.GET("/command/:id", s.getCommandStatus)
 		api.GET("/commands", s.listCommands)
 		api.DELETE("/command/:id", s.cancelCommand)
+
+		// 脚本API
+		api.POST("/script/execute", s.scriptService.ExecuteScript)
+		api.GET("/scripts", s.scriptService.ListScripts)
 
 		// 系统API
 		api.GET("/health", s.healthCheck)
@@ -216,36 +228,33 @@ func (s *Server) webInterface(c *gin.Context) {
 	})
 }
 
-// ExecuteCommand 直接执行命令（编程接口）
-func (s *Server) ExecuteCommand(deviceID, command string, timeout int) (*CommandExecution, error) {
-	return s.commandService.ExecuteCommand(deviceID, command, timeout)
+// ExecuteCommand 实现script.CommandExecutor接口
+func (s *Server) ExecuteCommand(deviceID, command string, timeout int) (script.CommandExecutionInterface, error) {
+	execution, err := s.commandService.ExecuteCommand(deviceID, command, timeout)
+	if err != nil {
+		return nil, err
+	}
+	return execution, nil
 }
 
-// GetExecution 获取执行状态（编程接口）
+// WaitForCompletion 实现script.CommandExecutor接口
+func (s *Server) WaitForCompletion(id string, maxWait time.Duration) (script.CommandExecutionInterface, error) {
+	return s.commandService.WaitForCompletion(id, maxWait)
+}
+
+// GetExecution 获取执行状态（原有的编程接口）
 func (s *Server) GetExecution(id string) (*CommandExecution, bool) {
 	return s.commandService.GetExecution(id)
 }
 
-// WaitForCompletion 等待命令完成（编程接口）
-func (s *Server) WaitForCompletion(id string, maxWait time.Duration) (*CommandExecution, error) {
-	startTime := time.Now()
+// ExecuteCommandDirect 直接执行命令（原有的编程接口）
+func (s *Server) ExecuteCommandDirect(deviceID, command string, timeout int) (*CommandExecution, error) {
+	return s.commandService.ExecuteCommand(deviceID, command, timeout)
+}
 
-	for {
-		execution, exists := s.commandService.GetExecution(id)
-		if !exists {
-			return nil, fmt.Errorf("执行记录不存在")
-		}
-
-		if execution.Status == "completed" || execution.Status == "failed" || execution.Status == "timeout" || execution.Status == "cancelled" {
-			return execution, nil
-		}
-
-		if time.Since(startTime) > maxWait {
-			return execution, fmt.Errorf("等待超时")
-		}
-
-		time.Sleep(100 * time.Millisecond)
-	}
+// WaitForCompletionDirect 等待命令完成（原有的编程接口）
+func (s *Server) WaitForCompletionDirect(id string, maxWait time.Duration) (*CommandExecution, error) {
+	return s.commandService.WaitForCompletion(id, maxWait)
 }
 
 // Run 启动服务器
